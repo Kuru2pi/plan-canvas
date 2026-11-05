@@ -2,22 +2,26 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ffffff">
 <title>Plan Canvas</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261105235842">
+<link rel="stylesheet" href="style.css?v=20261106003348">
 </head>
 <body>
 <header class="topbar">
   <div class="brand"><span class="logo"></span><span>Plan Canvas</span></div>
   <nav class="tabs" id="tabs">
-    <button data-page="map"><span class="ic-slot" data-icon="mindmap"></span>マインドマップ</button>
-    <button data-page="schedule"><span class="ic-slot" data-icon="gantt"></span>スケジュール</button>
-    <button data-page="day"><span class="ic-slot" data-icon="clock"></span>1日の計画</button>
+    <button data-page="map"><span class="ic-slot" data-icon="mindmap"></span><span class="lbl-l">マインドマップ</span><span class="lbl-s">マップ</span></button>
+    <button data-page="schedule"><span class="ic-slot" data-icon="gantt"></span><span class="lbl-l">スケジュール</span><span class="lbl-s">予定</span></button>
+    <button data-page="day"><span class="ic-slot" data-icon="clock"></span><span class="lbl-l">1日の計画</span><span class="lbl-s">1日</span></button>
   </nav>
   <div class="top-actions">
+    <button class="icon-btn m-only" id="btnPanel" title="一覧"><span class="ic-slot" data-icon="list"></span></button>
+    <button class="icon-btn m-only" id="btnInfo" title="詳細"><span class="ic-slot" data-icon="info"></span></button>
     <button class="icon-btn" id="btnUndo" title="元に戻す (⌘Z)"><span class="ic-slot" data-icon="undo"></span></button>
     <button class="icon-btn" id="btnRedo" title="やり直す (⇧⌘Z)"><span class="ic-slot" data-icon="redo"></span></button>
     <button class="icon-btn" id="btnMenu" title="メニュー"><span class="ic-slot" data-icon="more"></span></button>
@@ -62,7 +66,8 @@
   <aside class="panel right" id="inspector"></aside>
 </main>
 
+<div class="scrim" id="scrim"></div>
 <div class="toast" id="toast"></div>
-<script src="app.js?v=20261105235842"></script>
+<script src="app.js?v=20261106003348"></script>
 </body>
 </html>

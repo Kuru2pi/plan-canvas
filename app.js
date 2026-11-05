@@ -70,6 +70,8 @@ const ICONS = {
   gantt: '<path d="M2.5 4h6M5 8h8M3.5 12h5" stroke-width="2.4"/>',
   copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.8A1.3 1.3 0 014.3 2.5H10.5"/>',
   target: '<circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/>',
+  list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.5" cy="4" r=".8" fill="currentColor"/><circle cx="2.5" cy="8" r=".8" fill="currentColor"/><circle cx="2.5" cy="12" r=".8" fill="currentColor"/>',
+  info: '<circle cx="8" cy="8" r="6"/><path d="M8 7.3v3.7M8 5h.01"/>',
   note: '<path d="M3 2.5h10v7.5l-3.5 3.5H3z"/><path d="M9.5 13.5V10H13"/>',
   week: '<rect x="2" y="3" width="12" height="10.5" rx="1.5"/><path d="M2 6.5h12M6 6.5v7M10 6.5v7"/>',
   month: '<rect x="2" y="3" width="12" height="10.5" rx="1.5"/><path d="M2 6.5h12M2 10h12M6 6.5v7M10 6.5v7"/>',
@@ -92,9 +94,10 @@ function toast(msg) {
 
 // window-level pointer tracking so DOM re-renders mid-drag don't break the gesture
 function trackPointer(e, move, up) {
-  const sx = e.clientX, sy = e.clientY;
-  const mv = ev => move && move(ev, ev.clientX - sx, ev.clientY - sy);
+  const sx = e.clientX, sy = e.clientY, pid = e.pointerId;
+  const mv = ev => { if (ev.pointerId === pid) move && move(ev, ev.clientX - sx, ev.clientY - sy); };
   const done = ev => {
+    if (ev.pointerId !== pid) return;
     window.removeEventListener('pointermove', mv);
     window.removeEventListener('pointerup', done);
     window.removeEventListener('pointercancel', done);
@@ -309,8 +312,23 @@ let sel = new Set();
 let selBlock = null;
 let selMemo = null;
 
+const isMobile = () => matchMedia('(max-width: 760px)').matches;
+let sheetDismissed = null;
+const selKey = () => `${page}|${[...sel].join()}|${selBlock || ''}|${selMemo || ''}`;
+function hasSelection() {
+  if (page === 'day') return !!(selBlock && data.blocks[selBlock]);
+  return [...sel].some(id => data.nodes[id]) || !!(page === 'map' && selMemo);
+}
+function setSheet(open) {
+  document.body.classList.toggle('insp-open', open);
+  if (!open) sheetDismissed = selKey();
+}
+function setDrawer(open) { document.body.classList.toggle('panel-open', open); }
+
 function setPage(p) {
   closePopover();
+  setDrawer(false);
+  document.body.dataset.page = p;
   page = p;
   data.ui.page = p;
   save();
@@ -420,8 +438,10 @@ function initMap() {
     if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-e.deltaY * k * 0.01), e.clientX, e.clientY);
     else { data.view.x -= e.deltaX * k; data.view.y -= e.deltaY * k; applyView(); save(); }
   }, { passive: false });
+  trackTouches();
   mm.el.addEventListener('dblclick', e => {
     if (e.target.closest('button') || e.target.closest('.dock')) return;
+    if (mm.lastDoubleTap && Date.now() - mm.lastDoubleTap < 600) return;
     const me = e.target.closest('.memo');
     if (me) { startMemoEdit(me.dataset.memo); return; }
     const ne = e.target.closest('.node');
@@ -435,21 +455,21 @@ function buildDock() {
   const dock = $('#dock');
   dock.textContent = '';
   const tool = (name, ic, tip) => el('button', {
-    class: mm.tool === name ? 'on' : '', title: tip,
+    class: 'd-only' + (mm.tool === name ? ' on' : ''), title: tip,
     onclick: () => { mm.tool = name; mm.el.classList.toggle('hand', name === 'hand'); buildDock(); },
   }, icon(ic));
   dock.append(
     tool('select', 'cursor', '選択 (V)'),
     tool('hand', 'hand', '手のひら (H)'),
-    el('div', { class: 'sep' }),
+    el('div', { class: 'sep d-only' }),
     el('button', { title: '新しいプロジェクト', onclick: () => createRootAtCenter() }, icon('plus'), 'プロジェクト'),
     el('button', { title: 'メモを置く (M)', onclick: () => createMemoAtCenter() }, icon('note'), 'メモ'),
     el('div', { class: 'sep' }),
     el('button', { title: 'ツリーをきれいに並べ直す (⇧A)', onclick: () => tidyAll() }, icon('layout'), '整列'),
     el('div', { class: 'sep' }),
-    el('button', { title: 'ズームアウト', onclick: () => zoomAt(1 / 1.2) }, icon('minus')),
-    el('button', { class: 'zoom', id: 'zoomLbl', title: '100%に戻す (⇧0)', onclick: () => zoomTo(1) }, Math.round(data.view.z * 100) + '%'),
-    el('button', { title: 'ズームイン', onclick: () => zoomAt(1.2) }, icon('plus')),
+    el('button', { class: 'd-only', title: 'ズームアウト', onclick: () => zoomAt(1 / 1.2) }, icon('minus')),
+    el('button', { class: 'zoom d-only', id: 'zoomLbl', title: '100%に戻す (⇧0)', onclick: () => zoomTo(1) }, Math.round(data.view.z * 100) + '%'),
+    el('button', { class: 'd-only', title: 'ズームイン', onclick: () => zoomAt(1.2) }, icon('plus')),
     el('button', { title: '全体を表示 (⇧1)', onclick: () => fitView() }, icon('fit')),
   );
 }
@@ -509,15 +529,18 @@ function fitView() {
 function centerOn(id) {
   if (!mm.nodeEls[id]) return;
   const b = nodeBox(id), r = mm.el.getBoundingClientRect(), v = data.view;
+  // on phones the bottom sheet covers the lower part, so aim for the upper area
+  const cy = isMobile() ? r.height * 0.22 : r.height / 2;
   v.x = r.width / 2 - (b.x + b.w / 2) * v.z;
-  v.y = r.height / 2 - (b.y + b.h / 2) * v.z;
+  v.y = cy - (b.y + b.h / 2) * v.z;
   applyView(); save();
 }
 function ensureVisible(id) {
   if (!mm.nodeEls[id]) return;
   const b = nodeBox(id), r = mm.el.getBoundingClientRect(), v = data.view;
   const sx = b.x * v.z + v.x, sy = b.y * v.z + v.y, m = 60;
-  if (sx < m || sy < m || sx + b.w * v.z > r.width - m || sy + b.h * v.z > r.height - 90) centerOn(id);
+  const bottom = isMobile() ? r.height * 0.4 : r.height - 90;
+  if (sx < m || sy < m || sx + b.w * v.z > r.width - m || sy + b.h * v.z > bottom) centerOn(id);
 }
 
 function isUrgent(n) {
@@ -755,8 +778,69 @@ function tidyAll() {
 }
 
 /* ---------- pointer interactions ---------- */
+const touches = new Map();
+function trackTouches() {
+  mm.el.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    if (!touches.size) mm.pinchUsed = false;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) {
+      const [a, b] = [...touches.values()];
+      const r = mm.el.getBoundingClientRect();
+      const cx = (a.x + b.x) / 2 - r.left, cy = (a.y + b.y) / 2 - r.top;
+      mm.pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), z0: data.view.z, wx: (cx - data.view.x) / data.view.z, wy: (cy - data.view.y) / data.view.z };
+      mm.pinchUsed = true;
+    }
+  }, true);
+  window.addEventListener('pointermove', e => {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!mm.pinch || touches.size < 2) return;
+    const [a, b] = [...touches.values()];
+    const r = mm.el.getBoundingClientRect();
+    const cx = (a.x + b.x) / 2 - r.left, cy = (a.y + b.y) / 2 - r.top;
+    const z = clamp(mm.pinch.z0 * Math.hypot(a.x - b.x, a.y - b.y) / mm.pinch.d0, 0.15, 3);
+    data.view = { z, x: cx - mm.pinch.wx * z, y: cy - mm.pinch.wy * z };
+    applyView();
+  });
+  const end = e => {
+    if (!touches.delete(e.pointerId)) return;
+    if (touches.size < 2 && mm.pinch) { mm.pinch = null; save(); }
+  };
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+}
+// touch has no dblclick on most phones: detect a second tap on the same spot
+function isDoubleTap(e, key) {
+  const now = Date.now(), last = mm.lastTap;
+  mm.lastTap = { t: now, key, x: e.clientX, y: e.clientY };
+  if (last && last.key === key && now - last.t < 350 && Math.hypot(last.x - e.clientX, last.y - e.clientY) < 30) {
+    mm.lastTap = null;
+    mm.lastDoubleTap = now;
+    return true;
+  }
+  return false;
+}
+
 function onMapDown(e) {
   if (e.target.closest('.dock')) return;
+  if (e.pointerType === 'touch') {
+    if (touches.size > 1) return; // second finger of a pinch
+    const ne = e.target.closest('.node'), me = e.target.closest('.memo');
+    const key = ne ? 'n:' + ne.dataset.id : me ? 'm:' + me.dataset.memo : 'empty';
+    if (isDoubleTap(e, key) && !e.target.closest('button')) {
+      e.preventDefault();
+      if (ne) startEdit(ne.dataset.id);
+      else if (me) startMemoEdit(me.dataset.memo);
+      else { const p = screenToWorld(e.clientX, e.clientY); createRoot(p.x, p.y - 20); }
+      return;
+    }
+    if (!ne && !me) {
+      if (editingId) document.activeElement && document.activeElement.blur();
+      startPan(e);
+      return;
+    }
+  }
   if (editingId) {
     if (e.target.closest('.title[contenteditable="true"]')) return;
     document.activeElement && document.activeElement.blur();
@@ -773,10 +857,23 @@ function onMapDown(e) {
 
 function startPan(e) {
   const sx = data.view.x, sy = data.view.y;
+  let moved = false;
   mm.el.classList.add('panning');
   trackPointer(e, (ev, dx, dy) => {
+    if (mm.pinch || mm.pinchUsed) return;
+    if (Math.hypot(dx, dy) > 4) moved = true;
     data.view.x = sx + dx; data.view.y = sy + dy; applyView();
-  }, () => { mm.el.classList.remove('panning'); save(); });
+  }, () => {
+    mm.el.classList.remove('panning');
+    save();
+    // a tap on empty canvas: deselect, or offer + if it landed on a connection line
+    if (e.pointerType === 'touch' && !moved && !mm.pinchUsed) {
+      const w = screenToWorld(e.clientX, e.clientY);
+      const ed = edgeAt(w.x, w.y, 18 / data.view.z);
+      showEdgeAdd(ed);
+      if (!ed && (sel.size || selMemo)) { selMemo = null; selectOnly(null); }
+    }
+  });
 }
 
 function startNodeDrag(e, id) {
@@ -794,6 +891,7 @@ function startNodeDrag(e, id) {
   const single = sel.size === 1;
 
   trackPointer(e, (ev, dx, dy) => {
+    if (mm.pinch) return;
     if (!dragging) {
       if (Math.hypot(dx, dy) < 4) return;
       dragging = true;
@@ -1253,11 +1351,11 @@ function renderLayers() {
         class: `layer-row${isRoot ? ' root' : ''}${sel.has(c.id) ? ' selected' : ''}${c.done ? ' done' : ''}`,
         'data-id': c.id,
         style: { paddingLeft: 6 + depth * 14 + 'px' },
-        onpointerdown: ev => { if (!ev.target.closest('.arrow')) startRowDrag(ev, c.id, list, '.layer-row'); },
+        onpointerdown: ev => { if (ev.pointerType !== 'touch' && !ev.target.closest('.arrow')) startRowDrag(ev, c.id, list, '.layer-row'); },
         onclick: ev => {
           if (rowDragJustEnded) return;
           if (ev.shiftKey) { sel.has(c.id) ? sel.delete(c.id) : sel.add(c.id); updateSelection(); }
-          else { selectOnly(c.id); ensureVisible(c.id); }
+          else { setDrawer(false); selectOnly(c.id); ensureVisible(c.id); }
         },
         ondblclick: () => { centerOn(c.id); startEdit(c.id); },
       },
@@ -1284,9 +1382,10 @@ const sch = {
   mode: 'gantt', scale: 'day', showAll: false, fold: new Set(),
   month: todayISO().slice(0, 8) + '01', week: sunday(todayISO()), scroll: null, ctx: null, weekScroll: null,
 };
-const LW = 260;
+let LW = 260;
 
 function renderSchedule() {
+  LW = isMobile() ? 132 : 260;
   const box = $('#sched');
   const wrap = box.querySelector('.g-wrap');
   if (wrap && wrap.dataset.ready) sch.scroll = { l: wrap.scrollLeft, t: wrap.scrollTop };
@@ -1468,8 +1567,12 @@ function onGanttDown(e) {
   const fold = e.target.closest('[data-fold]');
   if (fold) { sch.fold.has(id) ? sch.fold.delete(id) : sch.fold.add(id); renderSchedule(); return; }
   if (e.target.closest('[data-done]')) { toggleDone(id); return; }
+  const touch = e.pointerType === 'touch';
+  const wasSelected = sel.has(id);
   selectOnly(id);
-  if (e.target.closest('.g-label')) { startRowDrag(e, id, $('#sched .g-body'), '.g-row'); return; }
+  if (e.target.closest('.g-label')) { if (!touch) startRowDrag(e, id, $('#sched .g-body'), '.g-row'); return; }
+  // on touch, the first tap selects (so the list can still scroll); drag once selected
+  if (touch && (!wasSelected || !e.target.closest('[data-mode]'))) return;
 
   const { dayW } = sch.ctx;
   const modeEl = e.target.closest('[data-mode]');
@@ -1896,6 +1999,21 @@ function onLaneDown(e) {
   if (e.button !== 0) return;
   const H = dayS.hourH;
   const be = e.target.closest('.blk');
+  if (be && e.pointerType === 'touch' && selBlock !== be.dataset.id) {
+    selBlock = be.dataset.id;
+    $$('.blk', dayS.lane).forEach(x => x.classList.toggle('sel', x.dataset.id === selBlock));
+    renderInspector();
+    return;
+  }
+  if (!be && e.pointerType === 'touch') {
+    trackPointer(e, null, (ev, dx, dy) => {
+      if (ev.type === 'pointercancel' || Math.hypot(dx, dy) > 8) return;
+      if (selBlock) { selBlock = null; renderBlocks(); renderInspector(); return; }
+      const m = clamp(Math.floor(minuteAt(e.clientY) / 30) * 30, 0, 1380);
+      openEventPopover(e.clientX, e.clientY, { date: dayS.date, start: m });
+    });
+    return;
+  }
   if (be) {
     e.preventDefault();
     const id = be.dataset.id, b = data.blocks[id];
@@ -1955,6 +2073,7 @@ function findFreeSlot(date, dur) {
   return clamp(from, 0, 1440 - dur);
 }
 function quickAdd(payload) {
+  setDrawer(false);
   const s = findFreeSlot(dayS.date, 60);
   createBlock({ ...payload, start: s, end: s + 60 });
   toast(`${fmtHM(s)}–${fmtHM(s + 60)} に追加しました`);
@@ -2117,6 +2236,10 @@ function renderInspector() {
   const focused = document.activeElement && box.contains(document.activeElement);
   if (focused && document.activeElement.matches('input[type=text], textarea')) return;
   box.textContent = '';
+  renderInspectorBody(box);
+  renderInspectorShell();
+}
+function renderInspectorBody(box) {
   if (page === 'day') {
     const b = selBlock && data.blocks[selBlock];
     box.append(b ? blockInspector(b) : daySummary());
@@ -2127,6 +2250,15 @@ function renderInspector() {
   if (ids.length === 1) box.append(nodeInspector(data.nodes[ids[0]]));
   else if (ids.length > 1) box.append(multiInspector(ids));
   else box.append(overviewInspector());
+}
+function renderInspectorShell() {
+  // on phones the inspector is a bottom sheet: it opens when something gets selected
+  if (!isMobile()) return;
+  const box = $('#inspector');
+  box.prepend(el('div', { class: 'sheet-bar' }, el('span', { class: 'grip' }), el('button', { class: 'x-btn', title: '閉じる', onclick: () => setSheet(false) }, icon('x'))));
+  const want = hasSelection() && sheetDismissed !== selKey();
+  if (want) document.body.classList.add('insp-open');
+  else if (!hasSelection()) document.body.classList.remove('insp-open');
 }
 
 function dateRow(label, n, key, onChange) {
@@ -2431,6 +2563,15 @@ function initTop() {
   $$('.ic-slot').forEach(s => s.replaceWith(icon(s.dataset.icon)));
   $$('#tabs button').forEach(b => b.addEventListener('click', () => setPage(b.dataset.page)));
   $('#btnUndo').addEventListener('click', undo);
+  $('#btnPanel').addEventListener('click', () => { setSheet(false); setDrawer(!document.body.classList.contains('panel-open')); });
+  $('#btnInfo').addEventListener('click', () => {
+    setDrawer(false);
+    if (document.body.classList.contains('insp-open')) setSheet(false);
+    else { sheetDismissed = null; document.body.classList.add('insp-open'); }
+  });
+  $('#scrim').addEventListener('click', () => { setDrawer(false); setSheet(false); });
+  let wasMobile = isMobile();
+  window.addEventListener('resize', () => { if (isMobile() !== wasMobile) { wasMobile = isMobile(); setDrawer(false); renderAll(); } });
   $('#btnRedo').addEventListener('click', redo);
   const menu = $('#menu');
   $('#btnMenu').addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; });
