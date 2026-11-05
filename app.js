@@ -70,6 +70,9 @@ const ICONS = {
   gantt: '<path d="M2.5 4h6M5 8h8M3.5 12h5" stroke-width="2.4"/>',
   copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.8A1.3 1.3 0 014.3 2.5H10.5"/>',
   target: '<circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="2"/>',
+  note: '<path d="M3 2.5h10v7.5l-3.5 3.5H3z"/><path d="M9.5 13.5V10H13"/>',
+  week: '<rect x="2" y="3" width="12" height="10.5" rx="1.5"/><path d="M2 6.5h12M6 6.5v7M10 6.5v7"/>',
+  month: '<rect x="2" y="3" width="12" height="10.5" rx="1.5"/><path d="M2 6.5h12M2 10h12M6 6.5v7M10 6.5v7"/>',
 };
 function icon(name) {
   const s = document.createElement('span');
@@ -124,6 +127,7 @@ const LEGACY_COLORS = {
   '#0D99FF': '#4F7FD9', '#9747FF': '#8A63D2', '#FF24BD': '#CF5C8E', '#F24822': '#D4643F', '#FFA629': '#C8962B',
   '#E8B500': '#C8962B', '#14AE5C': '#4F9673', '#00B5CE': '#3A8FA3', '#667799': '#737985', '#8C8C8C': ROUTINE_COLOR,
 };
+const MEMO_COLORS = ['#FFF3BF', '#FFE1E7', '#DCEBFF', '#DDF4E4', '#ECE6FF'];
 const migrateColor = c => (c && LEGACY_COLORS[c.toUpperCase()]) || c;
 
 function sampleData() {
@@ -176,6 +180,8 @@ function sampleData() {
   blk(15, 18, { title: 'バイト', color: '#FF24BD' });
   blk(19, 19.5, { title: '食事', color: '#FFA629' });
   blk(20, 21.5, { nodeId: pf });
+  const memo = uid();
+  d.notes = { [memo]: { id: memo, x: -300, y: -40, w: 220, color: MEMO_COLORS[0], text: '中間発表までに\n・先生にコンセプトを見せる\n・参考作品を3つ集める' } };
   return normalize(d);
 }
 
@@ -183,7 +189,8 @@ function normalize(d) {
   d.nodes = d.nodes || {};
   d.blocks = d.blocks || {};
   d.view = d.view || { x: 120, y: 120, z: 1 };
-  d.settings = Object.assign({ autoLayout: true }, d.settings);
+  d.settings = Object.assign({}, d.settings, { autoLayout: false }); // nodes are placed freely; 整列 is on demand
+  d.notes = d.notes || {};
   d.presets = d.presets || DEFAULT_PRESETS.map(p => ({ ...p }));
   d.ui = d.ui || { page: 'map' };
   for (const n of Object.values(d.nodes)) n.color = migrateColor(n.color);
@@ -210,7 +217,7 @@ function save() { clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 200
 window.addEventListener('beforeunload', flushSave);
 
 const undoStack = [], redoStack = [];
-const docState = () => JSON.stringify({ nodes: data.nodes, blocks: data.blocks, presets: data.presets });
+const docState = () => JSON.stringify({ nodes: data.nodes, blocks: data.blocks, presets: data.presets, notes: data.notes });
 function snapshot() {
   undoStack.push(docState());
   if (undoStack.length > 200) undoStack.shift();
@@ -219,8 +226,9 @@ function snapshot() {
 }
 function restore(s) {
   const o = JSON.parse(s);
-  data.nodes = o.nodes; data.blocks = o.blocks; data.presets = o.presets;
+  data.nodes = o.nodes; data.blocks = o.blocks; data.presets = o.presets; data.notes = o.notes || {};
   sel = new Set([...sel].filter(id => data.nodes[id]));
+  if (selMemo && !data.notes[selMemo]) selMemo = null;
   if (selBlock && !data.blocks[selBlock]) selBlock = null;
   save(); renderAll(); updateUndoButtons();
 }
@@ -299,6 +307,7 @@ function nextRootColor() {
 let page = data.ui.page || 'map';
 let sel = new Set();
 let selBlock = null;
+let selMemo = null;
 
 function setPage(p) {
   page = p;
@@ -319,6 +328,7 @@ function selectOnly(id) { sel = new Set(id ? [id] : []); updateSelection(); }
 function updateSelection(inspector = true) {
   if (page === 'map') {
     for (const [id, e] of Object.entries(mm.nodeEls)) e.classList.toggle('selected', sel.has(id));
+    for (const [id, e] of Object.entries(mm.memoEls)) e.classList.toggle('selected', selMemo === id);
     $$('#layers .layer-row').forEach(r => r.classList.toggle('selected', sel.has(r.dataset.id)));
   } else if (page === 'schedule') {
     $$('#sched [data-row]').forEach(r => r.classList.toggle('selected', sel.has(r.dataset.row)));
@@ -372,7 +382,7 @@ function toggleFold(id) {
 /* =========================================================
    Mind map
    ========================================================= */
-const mm = { el: null, world: null, svg: null, layer: null, marquee: null, nodeEls: {}, tool: 'select', space: false };
+const mm = { el: null, world: null, svg: null, layer: null, marquee: null, nodeEls: {}, memoEls: {}, tool: 'select', space: false };
 let editingId = null;
 
 function visibleNodes() {
@@ -398,6 +408,8 @@ function initMap() {
   }, { passive: false });
   mm.el.addEventListener('dblclick', e => {
     if (e.target.closest('button') || e.target.closest('.dock')) return;
+    const me = e.target.closest('.memo');
+    if (me) { startMemoEdit(me.dataset.memo); return; }
     const ne = e.target.closest('.node');
     if (ne) startEdit(ne.dataset.id);
     else { const p = screenToWorld(e.clientX, e.clientY); createRoot(p.x, p.y - 20); }
@@ -417,11 +429,9 @@ function buildDock() {
     tool('hand', 'hand', '手のひら (H)'),
     el('div', { class: 'sep' }),
     el('button', { title: '新しいプロジェクト', onclick: () => createRootAtCenter() }, icon('plus'), 'プロジェクト'),
+    el('button', { title: 'メモを置く (M)', onclick: () => createMemoAtCenter() }, icon('note'), 'メモ'),
     el('div', { class: 'sep' }),
-    el('button', {
-      class: data.settings.autoLayout ? 'on' : '', title: '自動整列のオン/オフ',
-      onclick: () => { data.settings.autoLayout = !data.settings.autoLayout; save(); buildDock(); renderMap(); toast(data.settings.autoLayout ? '自動整列: オン' : '自動整列: オフ（自由に配置できます）'); },
-    }, icon('layout'), '整列'),
+    el('button', { title: 'ツリーをきれいに並べ直す (⇧A)', onclick: () => tidyAll() }, icon('layout'), '整列'),
     el('div', { class: 'sep' }),
     el('button', { title: 'ズームアウト', onclick: () => zoomAt(1 / 1.2) }, icon('minus')),
     el('button', { class: 'zoom', id: 'zoomLbl', title: '100%に戻す (⇧0)', onclick: () => zoomTo(1) }, Math.round(data.view.z * 100) + '%'),
@@ -458,11 +468,10 @@ function nodeBox(id) {
   return { x: n.x, y: n.y, w: e ? e.offsetWidth : 160, h: e ? e.offsetHeight : 40 };
 }
 function fitView() {
-  const ids = Object.keys(mm.nodeEls);
-  if (!ids.length) return;
+  const boxes = Object.keys(mm.nodeEls).map(nodeBox).concat(Object.keys(mm.memoEls).map(memoBox));
+  if (!boxes.length) return;
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
-  for (const id of ids) {
-    const b = nodeBox(id);
+  for (const b of boxes) {
     x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h);
   }
   const r = mm.el.getBoundingClientRect();
@@ -502,6 +511,7 @@ function metaChips(n) {
   }
   const ds = descendants(n.id);
   if (ds.length) parts.push(el('span', null, `${ds.filter(k => k.done).length}/${ds.length}`));
+  if (n.note && n.note.trim()) parts.push(el('span', { class: 'has-note', title: n.note.slice(0, 120) }, icon('note')));
   return parts.length ? el('div', { class: 'meta' }, parts) : null;
 }
 
@@ -531,15 +541,23 @@ function renderMap() {
   if (editingId) return;
   mm.layer.textContent = '';
   mm.nodeEls = {};
+  mm.memoEls = {};
   const vis = visibleNodes();
   for (const n of vis) {
     const e = nodeEl(n);
     mm.layer.append(e);
     mm.nodeEls[n.id] = e;
   }
-  if (data.settings.autoLayout || data.ui.stack) {
-    layoutAll(!!data.ui.stack);
-    if (data.ui.stack) { delete data.ui.stack; requestAnimationFrame(fitView); }
+  // memos sit on top of the tree, like sticky notes
+  for (const m of Object.values(data.notes)) {
+    const e = memoEl(m);
+    mm.layer.append(e);
+    mm.memoEls[m.id] = e;
+  }
+  if (data.ui.stack) {
+    layoutAll(true);
+    delete data.ui.stack;
+    requestAnimationFrame(fitView);
     for (const n of vis) {
       const e = mm.nodeEls[n.id];
       e.style.left = n.x + 'px';
@@ -563,7 +581,7 @@ function drawEdges() {
     let x1, x2;
     if (n.x + cw / 2 >= p.x + pw / 2) { x1 = p.x + pw; x2 = n.x; } else { x1 = p.x; x2 = n.x + cw; }
     const dx = (x2 - x1) / 2;
-    out += `<path${n.done ? ' class="done"' : ''} d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"/>`;
+    out += `<path${n.done ? ' class="done"' : ''} stroke="${colorOf(n)}" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"/>`;
   }
   mm.svg.innerHTML = out;
 }
@@ -620,6 +638,9 @@ function onMapDown(e) {
   }
   if (e.button === 1 || mm.space || mm.tool === 'hand') { e.preventDefault(); startPan(e); return; }
   if (e.button !== 0) return;
+  const me = e.target.closest('.memo');
+  if (me) { startMemoDrag(e, me.dataset.memo); return; }
+  if (selMemo) { selMemo = null; updateSelection(false); }
   const ne = e.target.closest('.node');
   if (ne) startNodeDrag(e, ne.dataset.id);
   else startMarquee(e);
@@ -685,14 +706,13 @@ function startNodeDrag(e, id) {
       for (const s of tops) {
         if (s === target || isAncestor(s, target)) continue;
         const n = data.nodes[s];
+        const sibs = childrenOf(target).filter(c => c.id !== s);
+        const last = sibs[sibs.length - 1];
         n.parentId = target;
-        if (!data.settings.autoLayout) {
-          const tb = nodeBox(target);
-          const ox = t.x + tb.w + 56 - n.x, oy = t.y + 1e3 - n.y;
-          for (const d of [n, ...descendants(s)]) { d.x += ox; d.y += oy; }
-        } else {
-          n.y = t.y + 1e6; // place after existing children
-        }
+        const tb = nodeBox(target);
+        const ox = (last ? last.x : t.x + tb.w + 56) - n.x;
+        const oy = (last ? last.y + nodeBox(last.id).h + 14 : t.y) - n.y;
+        for (const d of [n, ...descendants(s)]) { d.x += ox; d.y += oy; }
       }
       toast(`「${t.title}」の下に移動しました`);
     }
@@ -851,9 +871,11 @@ function mapKey(e) {
   if (k === 'Enter' && mod) { e.preventDefault(); toggleDone(ids); return; }
   if (k === 'Enter') { e.preventDefault(); if (one) addSibling(one); else if (!ids.length) createRootAtCenter(); return; }
   if (k === 'F2') { e.preventDefault(); if (one) startEdit(one); return; }
+  if ((k === 'Delete' || k === 'Backspace') && selMemo) { e.preventDefault(); deleteMemo(selMemo); return; }
   if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); deleteNodes(ids); return; }
+  if (!mod && !e.shiftKey && k.toLowerCase() === 'm') { e.preventDefault(); createMemoAtCenter(); return; }
   if (k.startsWith('Arrow')) { e.preventDefault(); navigate(k); return; }
-  if (k === 'Escape') { selectOnly(null); return; }
+  if (k === 'Escape') { selMemo = null; selectOnly(null); return; }
   if (mod && k.toLowerCase() === 'a') { e.preventDefault(); sel = new Set(Object.keys(mm.nodeEls)); updateSelection(); return; }
   if (e.shiftKey && e.code === 'Digit1') { e.preventDefault(); fitView(); return; }
   if (e.shiftKey && e.code === 'Digit0') { e.preventDefault(); zoomTo(1); return; }
@@ -862,6 +884,90 @@ function mapKey(e) {
   if (mod && k === '-') { e.preventDefault(); zoomAt(1 / 1.2); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'v') { mm.tool = 'select'; mm.el.classList.remove('hand'); buildDock(); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'h') { mm.tool = 'hand'; mm.el.classList.add('hand'); buildDock(); }
+}
+
+/* ---------- sticky memos ---------- */
+function memoEl(m) {
+  return el('div', {
+    class: 'memo' + (selMemo === m.id ? ' selected' : ''), 'data-memo': m.id,
+    style: { left: m.x + 'px', top: m.y + 'px', width: (m.w || 200) + 'px', '--m': m.color || MEMO_COLORS[0] },
+  }, el('div', { class: 'memo-text' }, m.text || ''), el('div', { class: 'memo-rz', title: '幅を変更' }));
+}
+function memoBox(id) {
+  const m = data.notes[id], e = mm.memoEls[id];
+  return { x: m.x, y: m.y, w: e ? e.offsetWidth : m.w || 200, h: e ? e.offsetHeight : 80 };
+}
+function selectMemo(id) {
+  selMemo = id;
+  sel = new Set();
+  updateSelection();
+}
+function createMemo(x, y) {
+  const m = { id: uid(), x: Math.round(x), y: Math.round(y), w: 200, text: '', color: MEMO_COLORS[0] };
+  selMemo = m.id;
+  sel = new Set();
+  mutate(() => { data.notes[m.id] = m; });
+  startMemoEdit(m.id);
+}
+function createMemoAtCenter() {
+  if (page !== 'map') return;
+  const r = mm.el.getBoundingClientRect();
+  const p = screenToWorld(r.left + r.width / 2 - 100, r.top + r.height / 2 - 40);
+  createMemo(p.x, p.y);
+}
+function deleteMemo(id) {
+  if (!data.notes[id]) return;
+  mutate(() => { delete data.notes[id]; selMemo = null; });
+  toast('メモを削除しました（⌘Z で元に戻す）');
+}
+function startMemoDrag(e, id) {
+  if (selMemo !== id) selectMemo(id);
+  const m = data.notes[id], me = mm.memoEls[id];
+  const resize = !!e.target.closest('.memo-rz');
+  if (e.target.closest('.memo-text[contenteditable="true"]')) return;
+  const o = { x: m.x, y: m.y, w: m.w || me.offsetWidth };
+  let moved = false;
+  trackPointer(e, (ev, dx, dy) => {
+    if (!moved) { if (Math.hypot(dx, dy) < 3) return; moved = true; snapshot(); me.classList.add('moving'); }
+    const z = data.view.z;
+    if (resize) { m.w = Math.round(clamp(o.w + dx / z, 120, 520)); me.style.width = m.w + 'px'; }
+    else { m.x = Math.round(o.x + dx / z); m.y = Math.round(o.y + dy / z); me.style.left = m.x + 'px'; me.style.top = m.y + 'px'; }
+  }, () => { me.classList.remove('moving'); if (moved) save(); });
+}
+function startMemoEdit(id) {
+  if (page !== 'map') return;
+  const me = mm.memoEls[id];
+  if (!me) return;
+  const t = me.querySelector('.memo-text');
+  editingId = 'memo:' + id;
+  if (selMemo !== id) selectMemo(id);
+  me.classList.add('editing');
+  t.contentEditable = 'true';
+  t.focus();
+  const r = document.createRange();
+  r.selectNodeContents(t);
+  r.collapse(false);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+  const finish = () => {
+    if (editingId !== 'memo:' + id) return;
+    editingId = null;
+    t.contentEditable = 'false';
+    const v = t.innerText.replace(/\n+$/, '');
+    if (data.notes[id] && v !== data.notes[id].text) mutate(() => { data.notes[id].text = v; });
+    else renderAll();
+  };
+  t.onkeydown = ev => {
+    ev.stopPropagation();
+    if (ev.isComposing || ev.keyCode === 229) return;
+    if (ev.key === 'Escape' || (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey))) { ev.preventDefault(); finish(); }
+  };
+  t.onblur = finish;
+  t.onpaste = ev => {
+    ev.preventDefault();
+    document.execCommand('insertText', false, ev.clipboardData.getData('text/plain'));
+  };
 }
 
 /* ---------- layers panel ---------- */
@@ -903,9 +1009,10 @@ function renderLayers() {
 /* =========================================================
    Schedule (Gantt + month calendar)
    ========================================================= */
+const sunday = s => addDays(s, -parseISO(s).getDay());
 const sch = {
   mode: 'gantt', scale: 'day', showAll: false, fold: new Set(),
-  month: todayISO().slice(0, 8) + '01', scroll: null, ctx: null,
+  month: todayISO().slice(0, 8) + '01', week: sunday(todayISO()), scroll: null, ctx: null, weekScroll: null,
 };
 const LW = 260;
 
@@ -916,9 +1023,22 @@ function renderSchedule() {
   box.textContent = '';
 
   const tb = el('div', { class: 's-toolbar' });
-  const seg = (opts, cur, on) => el('div', { class: 'seg' },
-    opts.map(([v, label]) => el('button', { class: v === cur ? 'on' : '', onclick: () => on(v) }, label)));
-  tb.append(seg([['gantt', 'ガント'], ['cal', 'カレンダー']], sch.mode, v => { sch.mode = v; renderSchedule(); }));
+  const seg = (opts, cur, on, cls = '') => el('div', { class: 'seg ' + cls },
+    opts.map(([v, label, ic]) => el('button', { class: v === cur ? 'on' : '', onclick: () => on(v) }, ic ? icon(ic) : null, label)));
+  tb.append(seg([['gantt', 'タイムライン', 'gantt'], ['week', '週', 'week'], ['cal', '月', 'month']], sch.mode, v => { sch.mode = v; renderSchedule(); }, 'view'));
+  if (sch.mode === 'week') {
+    const ws = sch.week, we = addDays(ws, 6), a = parseISO(ws), b = parseISO(we);
+    tb.append(
+      el('button', { class: 'icon-btn', title: '前の週', onclick: () => { sch.week = addDays(sch.week, -7); renderSchedule(); } }, icon('chevL')),
+      el('div', { class: 'title' }, `${a.getMonth() + 1}月${a.getDate()}日 – ${a.getMonth() === b.getMonth() ? '' : b.getMonth() + 1 + '月'}${b.getDate()}日`),
+      el('button', { class: 'icon-btn', title: '次の週', onclick: () => { sch.week = addDays(sch.week, 7); renderSchedule(); } }, icon('chev')),
+      el('button', { class: 'btn', onclick: () => { sch.week = sunday(todayISO()); renderSchedule(); } }, '今日'),
+      el('div', { class: 'spacer' }),
+      el('span', { class: 'muted small' }, '予定をクリックで「1日の計画」へ'),
+    );
+    box.append(tb, buildWeek());
+    return;
+  }
   if (sch.mode === 'gantt') {
     tb.append(
       seg([['day', '日'], ['week', '週'], ['month', '月']], sch.scale, v => { sch.scale = v; sch.scroll = null; renderSchedule(); }),
@@ -1049,7 +1169,7 @@ function ganttRow({ n, depth, hasKids }, W) {
     const dates = ds.flatMap(d => [d.start, d.end, d.due]).filter(Boolean);
     if (dates.length) {
       const s = dates.reduce(minISO), e = dates.reduce(maxISO);
-      track.append(el('div', { class: 'g-sum', style: { left: diffDays(start, s) * dayW + 'px', width: (diffDays(s, e) + 1) * dayW + 'px' } }));
+      track.append(el('div', { class: 'g-sum', style: { left: diffDays(start, s) * dayW + 'px', width: (diffDays(s, e) + 1) * dayW + 'px', '--c': c } }));
     }
   }
   if (n.due) {
@@ -1127,6 +1247,97 @@ function onGanttDown(e) {
   });
 }
 
+function calItems() {
+  const items = [];
+  for (const n of allNodes()) {
+    // a parent's period just summarises its children, so only show the most detailed level
+    const summarised = descendants(n.id).some(d => d.start || d.end);
+    if ((n.start || n.end) && !summarised) items.push({ n, s: n.start || n.end, e: n.end || n.start, kind: 'period' });
+    if (n.due) items.push({ n, s: n.due, e: n.due, kind: 'due' });
+  }
+  return items;
+}
+// lays out one week's task bars into lanes; returns { bars, lanes }
+function weekBars(items, ws, { top, laneH, maxLanes, gutter = 0 }) {
+  const we = addDays(ws, 6);
+  const segs = items.filter(it => it.s <= we && it.e >= ws)
+    .map(it => ({ ...it, a: maxISO(it.s, ws), b: minISO(it.e, we) }))
+    .sort((x, y) => (x.a < y.a ? -1 : x.a > y.a ? 1 : diffDays(y.a, y.b) - diffDays(x.a, x.b)));
+  const lanes = [], bars = [];
+  const hidden = Array(7).fill(0);
+  const col = i => (gutter ? `calc(${gutter}px + (100% - ${gutter}px) * ${i / 7})` : `${i / 7 * 100}%`);
+  const span = k => (gutter ? `calc((100% - ${gutter}px) * ${k / 7} - 6px)` : `calc(${k / 7 * 100}% - 6px)`);
+  for (const sg of segs) {
+    const ai = diffDays(ws, sg.a), bi = diffDays(ws, sg.b);
+    let li = lanes.findIndex(end => end < ai);
+    if (li < 0) { li = lanes.length; lanes.push(-1); }
+    lanes[li] = bi;
+    if (li >= maxLanes) { for (let i = ai; i <= bi; i++) hidden[i]++; continue; }
+    const n = sg.n;
+    bars.push(el('div', {
+      class: `cal-bar${sg.kind === 'due' ? ' due' : ''}${sg.kind === 'due' && isUrgent(n) ? ' hot' : ''}${n.done ? ' done' : ''}${sg.a > sg.s ? ' cont-l' : ''}${sg.b < sg.e ? ' cont-r' : ''}${sel.has(n.id) ? ' sel' : ''}`,
+      'data-id': n.id,
+      style: { '--c': colorOf(n), top: top + li * laneH + 'px', left: `calc(${col(ai)} + 3px)`, width: span(bi - ai + 1) },
+      title: sg.kind === 'due' ? `締切: ${n.title}` : `${n.title}  ${fmtMD(sg.s)}–${fmtMD(sg.e)}`,
+      onclick: () => selectOnly(n.id),
+      ondblclick: () => revealNode(n.id),
+    }, n.title));
+  }
+  hidden.forEach((h, i) => {
+    if (h) bars.push(el('div', { class: 'cal-more', style: { top: top + maxLanes * laneH + 'px', left: col(i) } }, `+${h}件`));
+  });
+  return { bars, lanes: Math.min(lanes.length, maxLanes + (hidden.some(Boolean) ? 1 : 0)) };
+}
+
+function buildWeek() {
+  const ws = sch.week, today = todayISO();
+  const H = 40, G = 56;
+  const days = [...Array(7)].map((_, i) => addDays(ws, i));
+  const wrap = el('div', { class: 'wv' });
+
+  const head = el('div', { class: 'wv-head', style: { paddingLeft: G + 'px' } });
+  for (const d of days) {
+    const dt = parseISO(d);
+    const mins = blocksOn(d).reduce((a, b) => a + b.end - b.start, 0);
+    head.append(el('button', { class: `wv-day${d === today ? ' today' : ''}`, title: 'この日の計画を開く', onclick: () => { setDayDate(d); setPage('day'); } },
+      el('span', { class: 'wd' }, WD[dt.getDay()]), el('span', { class: 'wn' }, dt.getDate()),
+      mins ? el('span', { class: 'wh' }, fmtH(mins)) : null));
+  }
+  const { bars, lanes } = weekBars(calItems(), ws, { top: 6, laneH: 22, maxLanes: 4, gutter: G });
+  const allday = el('div', { class: 'wv-allday', style: { height: Math.max(34, 12 + lanes * 22) + 'px' } },
+    el('div', { class: 'wv-gutter-lbl' }, 'タスク'), bars);
+  wrap.append(head, allday);
+
+  const scroll = el('div', { class: 'wv-scroll' });
+  const grid = el('div', { class: 'wv-grid', style: { height: 24 * H + 'px', marginLeft: G + 'px' } });
+  for (let h = 1; h < 24; h++) grid.append(el('div', { class: 'hour', style: { top: h * H + 'px', left: -G + 'px' } }, el('span', null, `${pad(h)}:00`)));
+  days.forEach((d, i) => {
+    const colEl = el('div', { class: `wv-col${d === today ? ' today' : ''}`, style: { left: `${i / 7 * 100}%`, width: `${100 / 7}%` },
+      ondblclick: e => { if (!e.target.closest('.blk')) { setDayDate(d); setPage('day'); } } });
+    const bl = blocksOn(d);
+    const lay = layoutBlocks(bl);
+    for (const b of bl) {
+      const { col, n: cnt } = lay.get(b.id);
+      const node = linkedNode(b), dur = b.end - b.start;
+      colEl.append(el('div', {
+        class: `blk${node ? '' : ' routine'}${dur < 45 ? ' small' : ''}${node && node.done ? ' done' : ''}`,
+        style: { '--c': blockColor(b), top: b.start / 60 * H + 'px', height: Math.max(dur / 60 * H - 2, 9) + 'px', left: `calc(${col / cnt * 100}% + 1px)`, width: `calc(${100 / cnt}% - 3px)` },
+        title: `${blockTitle(b)}  ${fmtHM(b.start)}–${fmtHM(b.end)}`,
+        onclick: () => { setDayDate(d); selBlock = b.id; setPage('day'); },
+      }, el('div', { class: 'bt' }, blockTitle(b)), dur >= 60 ? el('div', { class: 'bm' }, `${fmtHM(b.start)}–${fmtHM(b.end)}`) : null));
+    }
+    if (d === today) colEl.append(el('div', { class: 'now', style: { top: nowMin() / 60 * H + 'px', left: 0 } }));
+    grid.append(colEl);
+  });
+  scroll.append(grid);
+  wrap.append(scroll);
+  requestAnimationFrame(() => {
+    scroll.scrollTop = sch.weekScroll ?? (days.includes(today) ? Math.max(0, nowMin() / 60 * H - 140) : 8 * H);
+  });
+  scroll.addEventListener('scroll', () => { sch.weekScroll = scroll.scrollTop; });
+  return wrap;
+}
+
 function buildCalendar() {
   const m = sch.month;
   const first = parseISO(m);
@@ -1137,19 +1348,13 @@ function buildCalendar() {
   const wrap = el('div', { class: 'cal' });
   wrap.append(el('div', { class: 'cal-head' }, WD.map(w => el('div', null, w))));
 
-  const items = [];
-  for (const n of allNodes()) {
-    // a parent's period just summarises its children, so only show the most detailed level
-    const summarised = descendants(n.id).some(d => d.start || d.end);
-    if ((n.start || n.end) && !summarised) items.push({ n, s: n.start || n.end, e: n.end || n.start, kind: 'period' });
-    if (n.due) items.push({ n, s: n.due, e: n.due, kind: 'due' });
-  }
+  const items = calItems();
   const minutesByDay = {};
   for (const b of Object.values(data.blocks)) minutesByDay[b.date] = (minutesByDay[b.date] || 0) + b.end - b.start;
 
   const LANE_TOP = 32, LANE_H = 22, MAX_LANES = 4;
   for (let w = 0; w < weeks; w++) {
-    const ws = addDays(gridStart, w * 7), we = addDays(ws, 6);
+    const ws = addDays(gridStart, w * 7);
     const row = el('div', { class: 'cal-week' });
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i);
@@ -1159,35 +1364,9 @@ function buildCalendar() {
           el('button', { class: 'cal-num', title: 'この日の計画を開く', onclick: () => { dayS.date = d; setPage('day'); } }, parseISO(d).getDate()),
           mins ? el('span', { class: 'cal-hrs' }, fmtH(mins)) : null)));
     }
-    const segs = items.filter(it => it.s <= we && it.e >= ws)
-      .map(it => ({ ...it, a: maxISO(it.s, ws), b: minISO(it.e, we) }))
-      .sort((x, y) => (x.a < y.a ? -1 : x.a > y.a ? 1 : diffDays(y.a, y.b) - diffDays(x.a, x.b)));
-    const lanes = [];
-    const hidden = Array(7).fill(0);
-    for (const sg of segs) {
-      const ai = diffDays(ws, sg.a), bi = diffDays(ws, sg.b);
-      let li = lanes.findIndex(end => end < ai);
-      if (li < 0) { li = lanes.length; lanes.push(-1); }
-      lanes[li] = bi;
-      if (li >= MAX_LANES) { for (let i = ai; i <= bi; i++) hidden[i]++; continue; }
-      const n = sg.n, c = colorOf(n);
-      const info = sg.kind === 'due' ? dueInfo(n.due, n.done) : null;
-      row.append(el('div', {
-        class: `cal-bar${sg.kind === 'due' ? ' due' : ''}${info && isUrgent(n) ? ' hot' : ''}${n.done ? ' done' : ''}${sg.a > sg.s ? ' cont-l' : ''}${sg.b < sg.e ? ' cont-r' : ''}${sel.has(n.id) ? ' sel' : ''}`,
-        'data-id': n.id,
-        style: {
-          '--c': c, top: LANE_TOP + li * LANE_H + 'px',
-          left: `calc(${ai / 7 * 100}% + 3px)`, width: `calc(${(bi - ai + 1) / 7 * 100}% - 6px)`,
-        },
-        title: sg.kind === 'due' ? `締切: ${n.title}` : `${n.title}  ${fmtMD(sg.s)}–${fmtMD(sg.e)}`,
-        onclick: () => selectOnly(n.id),
-        ondblclick: () => revealNode(n.id),
-      }, n.title));
-    }
-    hidden.forEach((h, i) => {
-      if (h) row.append(el('div', { class: 'cal-more', style: { top: LANE_TOP + MAX_LANES * LANE_H + 'px', left: `${i / 7 * 100}%` } }, `+${h}件`));
-    });
-    row.style.minHeight = Math.max(128, LANE_TOP + Math.min(lanes.length, MAX_LANES + 1) * LANE_H + 8) + 'px';
+    const { bars, lanes } = weekBars(items, ws, { top: LANE_TOP, laneH: LANE_H, maxLanes: MAX_LANES });
+    row.append(...bars);
+    row.style.minHeight = Math.max(128, LANE_TOP + lanes * LANE_H + 8) + 'px';
     wrap.append(row);
   }
   return wrap;
@@ -1200,7 +1379,7 @@ const dayS = { date: todayISO(), hourH: 48, scrollEl: null, lane: null, ghost: n
 const SNAP = 15;
 const blocksOn = date => Object.values(data.blocks).filter(b => b.date === date);
 const linkedNode = b => (b.nodeId && data.nodes[b.nodeId]) || null;
-const blockColor = b => { const n = linkedNode(b); return n ? colorOf(n) : '#D6D2CA'; };
+const blockColor = b => { const n = linkedNode(b); return n ? colorOf(n) : (b.color || ROUTINE_COLOR); };
 const blockTitle = b => { const n = linkedNode(b); return n ? n.title : (b.title || '無題の予定'); };
 
 function renderDay() { renderPalette(); renderDayMain(); }
@@ -1509,7 +1688,7 @@ function renderPalette() {
   const presets = el('div', { class: 'presets' });
   data.presets.forEach((p, i) => {
     const chip = el('div', {
-      class: 'preset', draggable: 'true', style: { '--c': ROUTINE_COLOR }, title: 'ドラッグで配置／クリックで追加／右クリックで削除',
+      class: 'preset', draggable: 'true', style: { '--c': p.color }, title: 'ドラッグで配置／クリックで追加／右クリックで削除',
       onclick: () => quickAdd({ title: p.title, color: p.color }),
       oncontextmenu: e => {
         e.preventDefault();
@@ -1579,6 +1758,7 @@ function renderInspector() {
     box.append(b ? blockInspector(b) : daySummary());
     return;
   }
+  if (page === 'map' && selMemo && data.notes[selMemo]) { box.append(memoInspector(data.notes[selMemo])); return; }
   const ids = [...sel].filter(id => data.nodes[id]);
   if (ids.length === 1) box.append(nodeInspector(data.nodes[ids[0]]));
   else if (ids.length > 1) box.append(multiInspector(ids));
@@ -1693,6 +1873,17 @@ function nodeInspector(n) {
   return frag;
 }
 
+function memoInspector(m) {
+  const frag = document.createDocumentFragment();
+  frag.append(sec('メモ', live(el('textarea', { class: 'inp', placeholder: 'メモを入力', value: m.text || '', style: { minHeight: '160px' } }), v => { m.text = v; })));
+  const sw = el('div', { class: 'swatches' });
+  for (const col of MEMO_COLORS) sw.append(el('button', { class: 'sw' + (m.color === col ? ' on' : ''), style: { background: col, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.12)' }, onclick: () => mutate(() => { m.color = col; }) }));
+  frag.append(sec('色', sw));
+  frag.append(sec(null, el('div', { class: 'muted small', style: { marginBottom: '10px' } }, 'ダブルクリックでキャンバス上でも編集できます。右下の角をドラッグで幅を変更。'),
+    el('button', { class: 'btn danger', onclick: () => deleteMemo(m.id) }, icon('trash'), '削除')));
+  return frag;
+}
+
 function multiInspector(ids) {
   const frag = document.createDocumentFragment();
   frag.append(sec(`${ids.length}件を選択中`,
@@ -1744,7 +1935,7 @@ function overviewInspector() {
       ['ダブルクリック', '新しいプロジェクト'], ['Tab', '子タスクを追加'], ['Enter', '同じ階層に追加'],
       ['F2', '名前を変更'], ['⌘ Enter', '完了/未完了'], ['Delete', '削除'], ['矢印キー', 'タスク間を移動'],
       ['Space+ドラッグ', 'キャンバス移動'], ['⌘+スクロール', 'ズーム'], ['⇧1', '全体を表示'], ['⇧A', '整列し直す'],
-      ['ドラッグ→タスク上', '親を変更'],
+      ['M', 'メモを置く'], ['ドラッグ', '自由に配置'], ['ドラッグ→タスク上', '親を変更'],
     ];
     frag.append(el('details', { class: 'sec' }, el('summary', null, 'ショートカット'),
       el('div', { class: 'kbd-list' }, keys.map(([k, v]) => [el('span', { class: 'muted' }, v), el('kbd', null, k)]))));
@@ -1889,11 +2080,11 @@ function initTop() {
       if (!confirm('サンプルデータに置き換えますか？（⌘Z で元に戻せます）')) return;
       snapshot();
       const s = sampleData();
-      data.nodes = s.nodes; data.blocks = s.blocks; data.presets = s.presets; data.ui.stack = true;
+      data.nodes = s.nodes; data.blocks = s.blocks; data.presets = s.presets; data.notes = s.notes; data.ui.stack = true;
       sel = new Set(); selBlock = null; save(); renderAll();
     } else if (act === 'clear') {
       if (!confirm('すべてのタスクと予定を削除しますか？（⌘Z で元に戻せます）')) return;
-      mutate(() => { data.nodes = {}; data.blocks = {}; sel = new Set(); selBlock = null; });
+      mutate(() => { data.nodes = {}; data.blocks = {}; data.notes = {}; sel = new Set(); selBlock = null; selMemo = null; });
     }
   });
   $('#fileImport').addEventListener('change', e => {
