@@ -685,17 +685,26 @@ function liftChildren(id) {
   }
   return kids;
 }
-function removeKeepChildren(id) {
-  const n = data.nodes[id];
-  if (!n) return;
-  let kids = [];
+// delete only these tasks; anything after them reconnects to the task before them
+function removeKeepChildren(ids) {
+  ids = [].concat(ids).filter(id => data.nodes[id]);
+  if (!ids.length) return;
+  const names = ids.map(id => data.nodes[id].title);
+  let kept = 0, next = null;
   mutate(() => {
-    kids = liftChildren(id);
-    for (const b of Object.values(data.blocks)) if (b.nodeId === id) { b.title = n.title; b.color = colorOf(n); b.nodeId = null; }
-    delete data.nodes[id];
-    sel = new Set(kids.length ? [kids[0].id] : parentOf(n) ? [n.parentId] : []);
+    for (const id of ids) {
+      const n = data.nodes[id];
+      if (!n) continue;
+      const kids = liftChildren(id);
+      kept += kids.length;
+      for (const b of Object.values(data.blocks)) if (b.nodeId === id) { b.title = n.title; b.color = colorOf(n); b.nodeId = null; }
+      delete data.nodes[id];
+      next = kids[0] ? kids[0].id : parentOf(n) && data.nodes[n.parentId] ? n.parentId : next;
+    }
+    sel = new Set(next && data.nodes[next] ? [next] : []);
   });
-  toast(`「${n.title}」を抜きました（子タスクは残っています）`);
+  const what = names.length === 1 ? `「${names[0]}」` : `${names.length}件`;
+  toast(kept ? `${what}を削除しました（後ろの${kept}件はつなぎ直しました・⌘Z で元に戻す）` : `${what}を削除しました（⌘Z で元に戻す）`);
 }
 
 /* ---------- auto layout: children fan out to the right, roots stay put ---------- */
@@ -1004,8 +1013,8 @@ function mapKey(e) {
   if (k === 'Enter') { e.preventDefault(); if (one) addSibling(one); else if (!ids.length) createRootAtCenter(); return; }
   if (k === 'F2') { e.preventDefault(); if (one) startEdit(one); return; }
   if ((k === 'Delete' || k === 'Backspace') && selMemo) { e.preventDefault(); deleteMemo(selMemo); return; }
-  if ((k === 'Delete' || k === 'Backspace') && e.shiftKey && one) { e.preventDefault(); removeKeepChildren(one); return; }
-  if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); deleteNodes(ids); return; }
+  if ((k === 'Delete' || k === 'Backspace') && e.shiftKey) { e.preventDefault(); deleteNodes(ids); return; }
+  if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); removeKeepChildren(ids); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'm') { e.preventDefault(); createMemoAtCenter(); return; }
   if (k.startsWith('Arrow')) { e.preventDefault(); navigate(k); return; }
   if (k === 'Escape') { selMemo = null; selectOnly(null); return; }
@@ -2002,8 +2011,8 @@ function nodeInspector(n) {
       class: 'btn', title: '親から切り離して独立したプロジェクトにする',
       onclick: () => mutate(() => { n.color = n.color || colorOf(n); n.parentId = null; }),
     }, '独立させる') : null,
-    kids.length ? el('button', { class: 'btn', title: 'このタスクだけ抜き、子タスクは親につなぎ直す (⇧Delete)', onclick: () => removeKeepChildren(n.id) }, '抜く（子は残す）') : null,
-    el('button', { class: 'btn danger', onclick: () => deleteNodes([n.id]) }, icon('trash'), kids.length ? '子ごと削除' : '削除'),
+    el('button', { class: 'btn danger', title: kids.length ? 'このタスクだけ削除し、後ろのタスクは前のタスクにつなぎ直す (Delete)' : '削除 (Delete)', onclick: () => removeKeepChildren(n.id) }, icon('trash'), '削除'),
+    kids.length ? el('button', { class: 'btn danger', title: '後ろのタスクもまとめて削除 (⇧Delete)', onclick: () => deleteNodes([n.id]) }, '後ろもまとめて削除') : null,
   )));
   if (page === 'map' && !isRoot) frag.append(el('div', { class: 'muted small', style: { padding: '0 18px 16px' } }, 'ヒント: タスクを線の上にドラッグすると間にはめられます。⌥(Option)を押しながらドラッグすると、子タスクを残して抜き出せます。'));
   return frag;
@@ -2026,7 +2035,8 @@ function multiInspector(ids) {
     el('div', { class: 'btns' },
       el('button', { class: 'btn', onclick: () => mutate(() => ids.forEach(id => { data.nodes[id].done = true; })) }, icon('check'), 'すべて完了'),
       el('button', { class: 'btn', onclick: () => mutate(() => ids.forEach(id => { data.nodes[id].done = false; })) }, '未完了に戻す'),
-      el('button', { class: 'btn danger', onclick: () => deleteNodes(ids) }, icon('trash'), '削除'))));
+      el('button', { class: 'btn danger', onclick: () => removeKeepChildren(ids) }, icon('trash'), '削除'),
+      el('button', { class: 'btn danger', onclick: () => deleteNodes(ids) }, '後ろもまとめて削除'))));
   const dsec = sec('締切をまとめて設定');
   const inp = el('input', { class: 'inp', type: 'date' });
   dsec.append(row('締切', inp, el('button', { class: 'btn sm', onclick: () => inp.value && mutate(() => ids.forEach(id => { data.nodes[id].due = inp.value; })) }, '適用')));
@@ -2069,11 +2079,11 @@ function overviewInspector() {
   if (page === 'map') {
     const keys = [
       ['ダブルクリック', '新しいプロジェクト'], ['Tab', '子タスクを追加'], ['Enter', '同じ階層に追加'],
-      ['F2', '名前を変更'], ['⌘ Enter', '完了/未完了'], ['Delete', '削除'], ['矢印キー', 'タスク間を移動'],
+      ['F2', '名前を変更'], ['⌘ Enter', '完了/未完了'], ['矢印キー', 'タスク間を移動'],
       ['Space+ドラッグ', 'キャンバス移動'], ['⌘+スクロール', 'ズーム'], ['⇧1', '全体を表示'], ['⇧A', '整列し直す'],
       ['M', 'メモを置く'], ['ドラッグ', '自由に配置'], ['ドラッグ→タスク上', '親を変更'],
       ['ドラッグ→線の上', '間にはめる'], ['線にカーソル→＋', '間に新しいタスク'], ['⇧Tab', '親との間に挿入'],
-      ['⌥+ドラッグ', '子を残して抜き出す'], ['⇧Delete', '子を残して削除'],
+      ['⌥+ドラッグ', '子を残して抜き出す'], ['Delete', '削除（後ろはつなぎ直す）'], ['⇧Delete', '後ろもまとめて削除'],
     ];
     frag.append(el('details', { class: 'sec' }, el('summary', null, 'ショートカット'),
       el('div', { class: 'kbd-list' }, keys.map(([k, v]) => [el('span', { class: 'muted' }, v), el('kbd', null, k)]))));
