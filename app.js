@@ -400,6 +400,19 @@ function initMap() {
   mm.marquee = $('#mm .marquee');
 
   mm.el.addEventListener('pointerdown', onMapDown);
+  mm.edgeAdd = el('button', { class: 'edge-add', title: 'ここにタスクを挿入', onpointerdown: e => e.stopPropagation(), onclick: () => { if (mm.edgeAddFor) insertBetween(mm.edgeAddFor); } }, icon('plus'));
+  mm.el.append(mm.edgeAdd);
+  mm.el.addEventListener('pointermove', e => {
+    if (e.buttons || editingId || mm.space || mm.tool === 'hand') return;
+    if (e.target.closest('.edge-add')) return;
+    let ed = null;
+    if (!e.target.closest('.node, .memo, .dock')) {
+      const w = screenToWorld(e.clientX, e.clientY);
+      ed = edgeAt(w.x, w.y, 10 / data.view.z);
+    }
+    showEdgeAdd(ed);
+  });
+  mm.el.addEventListener('pointerleave', () => showEdgeAdd(null));
   mm.el.addEventListener('wheel', e => {
     e.preventDefault();
     const k = e.deltaMode === 1 ? 16 : 1;
@@ -440,12 +453,23 @@ function buildDock() {
   );
 }
 
+function showEdgeAdd(ed) {
+  const b = mm.edgeAdd;
+  if (!ed) { b.style.display = 'none'; mm.edgeAddFor = null; if (mm.hotEdge && !mm.el.classList.contains('dragging')) setHotEdge(null); return; }
+  const pt = edgePoint(ed, 0.5), v = data.view;
+  b.style.display = 'flex';
+  b.style.left = pt.x * v.z + v.x + 'px';
+  b.style.top = pt.y * v.z + v.y + 'px';
+  mm.edgeAddFor = ed.c;
+  setHotEdge(ed.c);
+}
 function screenToWorld(cx, cy) {
   const r = mm.el.getBoundingClientRect(), v = data.view;
   return { x: (cx - r.left - v.x) / v.z, y: (cy - r.top - v.y) / v.z };
 }
 function applyView() {
   const v = data.view;
+  if (mm.edgeAdd) mm.edgeAdd.style.display = 'none';
   mm.world.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.z})`;
   const g = 20 * v.z;
   mm.el.style.backgroundSize = `${g}px ${g}px`;
@@ -571,6 +595,7 @@ function renderMap() {
 
 function drawEdges() {
   let out = '';
+  mm.edges = [];
   for (const [id, e] of Object.entries(mm.nodeEls)) {
     const n = data.nodes[id];
     const pid = parentOf(n);
@@ -581,9 +606,96 @@ function drawEdges() {
     let x1, x2;
     if (n.x + cw / 2 >= p.x + pw / 2) { x1 = p.x + pw; x2 = n.x; } else { x1 = p.x; x2 = n.x + cw; }
     const dx = (x2 - x1) / 2;
-    out += `<path${n.done ? ' class="done"' : ''} stroke="${colorOf(n)}" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"/>`;
+    mm.edges.push({ c: id, p: pid, x1, y1, x2, y2, dx });
+    const cls = [n.done ? 'done' : '', mm.hotEdge === id ? 'hot' : ''].filter(Boolean).join(' ');
+    out += `<path${cls ? ` class="${cls}"` : ''} stroke="${colorOf(n)}" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"/>`;
   }
   mm.svg.innerHTML = out;
+}
+// point on an edge's bezier at t (0..1)
+function edgePoint(ed, t) {
+  const u = 1 - t;
+  const cx1 = ed.x1 + ed.dx, cx2 = ed.x2 - ed.dx;
+  return {
+    x: u * u * u * ed.x1 + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * ed.x2,
+    y: u * u * u * ed.y1 + 3 * u * u * t * ed.y1 + 3 * u * t * t * ed.y2 + t * t * t * ed.y2,
+  };
+}
+// nearest edge to a world point within `tol` world px; skips edges touching `skip`
+function edgeAt(wx, wy, tol, skip) {
+  let best = null, bd = tol;
+  for (const ed of mm.edges || []) {
+    if (skip && (skip.has(ed.c) || skip.has(ed.p))) continue;
+    if (wx < Math.min(ed.x1, ed.x2) - tol || wx > Math.max(ed.x1, ed.x2) + tol) continue;
+    for (let i = 1; i < 24; i++) {
+      const pt = edgePoint(ed, i / 24);
+      const d = Math.hypot(pt.x - wx, pt.y - wy);
+      if (d < bd) { bd = d; best = ed; }
+    }
+  }
+  return best;
+}
+function setHotEdge(id) {
+  if (mm.hotEdge === id) return;
+  mm.hotEdge = id;
+  drawEdges();
+}
+
+/* ---------- insert between / pull out ---------- */
+function subtreeRight(id) {
+  return Math.max(...[data.nodes[id], ...descendants(id)].map(d => d.x + (mm.nodeEls[d.id] ? nodeBox(d.id).w : 160)));
+}
+function shiftSubtree(id, dx, dy = 0) {
+  for (const d of [data.nodes[id], ...descendants(id)]) { d.x = Math.round(d.x + dx); d.y = Math.round(d.y + dy); }
+}
+// new empty task between a child and its parent
+function insertBetween(cid) {
+  const c = data.nodes[cid];
+  const pid = c && parentOf(c);
+  if (!pid) { toast('プロジェクトの上には挿入できません'); return; }
+  const n = { id: uid(), parentId: pid, title: '新しいタスク', done: false, x: c.x, y: c.y };
+  sel = new Set([n.id]);
+  mutate(() => {
+    shiftSubtree(cid, 190);
+    c.parentId = n.id;
+    data.nodes[n.id] = n;
+  });
+  mm.hotEdge = null;
+  if (page === 'map') { ensureVisible(n.id); startEdit(n.id); }
+}
+// put an existing task (with its own children) between parent and child of an edge
+function placeOnEdge(sid, ed) {
+  const s = data.nodes[sid], c = data.nodes[ed.c];
+  s.parentId = ed.p;
+  shiftSubtree(sid, c.x - s.x, c.y - s.y);
+  const room = subtreeRight(sid) - s.x + 56;
+  shiftSubtree(ed.c, room);
+  c.parentId = sid;
+}
+// detach a task from the middle of a branch: its children move up to its parent
+function liftChildren(id) {
+  const n = data.nodes[id];
+  const pid = parentOf(n);
+  const kids = childrenOf(id);
+  const w = (mm.nodeEls[id] ? nodeBox(id).w : 160) + 56;
+  for (const k of kids) {
+    if (!pid) k.color = k.color || colorOf(n);
+    k.parentId = pid;
+    shiftSubtree(k.id, -w);
+  }
+  return kids;
+}
+function removeKeepChildren(id) {
+  const n = data.nodes[id];
+  if (!n) return;
+  let kids = [];
+  mutate(() => {
+    kids = liftChildren(id);
+    for (const b of Object.values(data.blocks)) if (b.nodeId === id) { b.title = n.title; b.color = colorOf(n); b.nodeId = null; }
+    delete data.nodes[id];
+    sel = new Set(kids.length ? [kids[0].id] : parentOf(n) ? [n.parentId] : []);
+  });
+  toast(`「${n.title}」を抜きました（子タスクは残っています）`);
 }
 
 /* ---------- auto layout: children fan out to the right, roots stay put ---------- */
@@ -660,17 +772,24 @@ function startNodeDrag(e, id) {
   updateSelection();
   if (!sel.has(id)) return;
 
+  // Alt/Option-drag: pull just this task out, leaving its children connected to its parent
+  const pullOut = e.altKey && sel.size === 1 && childrenOf(id).length > 0;
   const moving = new Set();
-  for (const s of sel) { moving.add(s); descendants(s).forEach(d => moving.add(d.id)); }
+  for (const s of sel) { moving.add(s); if (!pullOut) descendants(s).forEach(d => moving.add(d.id)); }
   const start = {};
-  moving.forEach(m => { start[m] = { x: data.nodes[m].x, y: data.nodes[m].y }; });
-  let dragging = false, target = null;
+  let dragging = false, target = null, edge = null;
+  const single = sel.size === 1;
 
   trackPointer(e, (ev, dx, dy) => {
     if (!dragging) {
       if (Math.hypot(dx, dy) < 4) return;
       dragging = true;
       snapshot();
+      if (pullOut) {
+        liftChildren(id);
+        renderMap();
+      }
+      moving.forEach(m => { start[m] = { x: data.nodes[m].x, y: data.nodes[m].y }; });
       mm.el.classList.add('dragging');
       moving.forEach(m => mm.nodeEls[m] && mm.nodeEls[m].classList.add('moving'));
     }
@@ -682,7 +801,6 @@ function startNodeDrag(e, id) {
       const ne = mm.nodeEls[m];
       if (ne) { ne.style.left = n.x + 'px'; ne.style.top = n.y + 'px'; }
     });
-    drawEdges();
     let t = null;
     for (const x of document.elementsFromPoint(ev.clientX, ev.clientY)) {
       const ne = x.closest && x.closest('.node');
@@ -693,8 +811,17 @@ function startNodeDrag(e, id) {
       target = t;
       if (target) mm.nodeEls[target].classList.add('drop');
     }
+    drawEdges();
+    // over a connection line? → insert between
+    edge = null;
+    if (!target && single) {
+      const w = screenToWorld(ev.clientX, ev.clientY);
+      edge = edgeAt(w.x, w.y, 14 / z, moving);
+    }
+    setHotEdge(edge ? edge.c : null);
   }, () => {
     mm.el.classList.remove('dragging');
+    setHotEdge(null);
     if (!dragging) {
       if (!e.shiftKey && sel.size > 1) selectOnly(id);
       return;
@@ -705,16 +832,20 @@ function startNodeDrag(e, id) {
       t.collapsed = false;
       for (const s of tops) {
         if (s === target || isAncestor(s, target)) continue;
-        const n = data.nodes[s];
         const sibs = childrenOf(target).filter(c => c.id !== s);
         const last = sibs[sibs.length - 1];
+        const n = data.nodes[s];
         n.parentId = target;
         const tb = nodeBox(target);
-        const ox = (last ? last.x : t.x + tb.w + 56) - n.x;
-        const oy = (last ? last.y + nodeBox(last.id).h + 14 : t.y) - n.y;
-        for (const d of [n, ...descendants(s)]) { d.x += ox; d.y += oy; }
+        shiftSubtree(s, (last ? last.x : t.x + tb.w + 56) - n.x, (last ? last.y + nodeBox(last.id).h + 14 : t.y) - n.y);
       }
       toast(`「${t.title}」の下に移動しました`);
+    } else if (edge) {
+      const p = data.nodes[edge.p], c = data.nodes[edge.c];
+      placeOnEdge(id, edge);
+      toast(`「${p.title}」と「${c.title}」の間にはめました`);
+    } else if (pullOut) {
+      toast('抜き出しました（子タスクは元の親につながっています）');
     }
     save();
     renderAll();
@@ -867,11 +998,13 @@ function mapKey(e) {
   const one = ids.length === 1 ? ids[0] : null;
   const k = e.key;
   if (k === ' ') { e.preventDefault(); if (!mm.space) { mm.space = true; mm.el.classList.add('space'); } return; }
+  if (k === 'Tab' && e.shiftKey) { e.preventDefault(); if (one) insertBetween(one); return; }
   if (k === 'Tab') { e.preventDefault(); if (one) addChild(one); return; }
   if (k === 'Enter' && mod) { e.preventDefault(); toggleDone(ids); return; }
   if (k === 'Enter') { e.preventDefault(); if (one) addSibling(one); else if (!ids.length) createRootAtCenter(); return; }
   if (k === 'F2') { e.preventDefault(); if (one) startEdit(one); return; }
   if ((k === 'Delete' || k === 'Backspace') && selMemo) { e.preventDefault(); deleteMemo(selMemo); return; }
+  if ((k === 'Delete' || k === 'Backspace') && e.shiftKey && one) { e.preventDefault(); removeKeepChildren(one); return; }
   if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); deleteNodes(ids); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'm') { e.preventDefault(); createMemoAtCenter(); return; }
   if (k.startsWith('Arrow')) { e.preventDefault(); navigate(k); return; }
@@ -1864,12 +1997,15 @@ function nodeInspector(n) {
   frag.append(sec(null, el('div', { class: 'btns' },
     page !== 'map' ? el('button', { class: 'btn', onclick: () => revealNode(n.id) }, icon('mindmap'), 'マップで表示') : null,
     page !== 'schedule' ? el('button', { class: 'btn', onclick: () => setPage('schedule') }, icon('gantt'), 'スケジュール') : null,
+    !isRoot ? el('button', { class: 'btn', title: '親との間に新しいタスクを挿入 (⇧Tab)', onclick: () => { if (page !== 'map') setPage('map'); insertBetween(n.id); } }, icon('plus'), '親との間に挿入') : null,
     !isRoot ? el('button', {
       class: 'btn', title: '親から切り離して独立したプロジェクトにする',
-      onclick: () => mutate(() => { n.color = n.color || colorOf(n); n.parentId = null; n.y = 1e6; }),
+      onclick: () => mutate(() => { n.color = n.color || colorOf(n); n.parentId = null; }),
     }, '独立させる') : null,
-    el('button', { class: 'btn danger', onclick: () => deleteNodes([n.id]) }, icon('trash'), '削除'),
+    kids.length ? el('button', { class: 'btn', title: 'このタスクだけ抜き、子タスクは親につなぎ直す (⇧Delete)', onclick: () => removeKeepChildren(n.id) }, '抜く（子は残す）') : null,
+    el('button', { class: 'btn danger', onclick: () => deleteNodes([n.id]) }, icon('trash'), kids.length ? '子ごと削除' : '削除'),
   )));
+  if (page === 'map' && !isRoot) frag.append(el('div', { class: 'muted small', style: { padding: '0 18px 16px' } }, 'ヒント: タスクを線の上にドラッグすると間にはめられます。⌥(Option)を押しながらドラッグすると、子タスクを残して抜き出せます。'));
   return frag;
 }
 
@@ -1936,6 +2072,8 @@ function overviewInspector() {
       ['F2', '名前を変更'], ['⌘ Enter', '完了/未完了'], ['Delete', '削除'], ['矢印キー', 'タスク間を移動'],
       ['Space+ドラッグ', 'キャンバス移動'], ['⌘+スクロール', 'ズーム'], ['⇧1', '全体を表示'], ['⇧A', '整列し直す'],
       ['M', 'メモを置く'], ['ドラッグ', '自由に配置'], ['ドラッグ→タスク上', '親を変更'],
+      ['ドラッグ→線の上', '間にはめる'], ['線にカーソル→＋', '間に新しいタスク'], ['⇧Tab', '親との間に挿入'],
+      ['⌥+ドラッグ', '子を残して抜き出す'], ['⇧Delete', '子を残して削除'],
     ];
     frag.append(el('details', { class: 'sec' }, el('summary', null, 'ショートカット'),
       el('div', { class: 'kbd-list' }, keys.map(([k, v]) => [el('span', { class: 'muted' }, v), el('kbd', null, k)]))));

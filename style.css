@@ -518,3 +518,13 @@ kbd {
 .wv-col .blk { cursor: pointer; padding: 2px 6px 2px 8px; font-size: 11px; }
 .wv-col .now { left: 0; }
 .wv-col .now::before { left: -4px; }
+
+/* ---------- insert between ---------- */
+.edges path.hot { stroke: var(--accent) !important; stroke-opacity: 1; stroke-width: 3; }
+.edge-add {
+  position: absolute; display: none; align-items: center; justify-content: center; z-index: 5;
+  width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+  background: var(--accent); color: #fff; box-shadow: 0 0 0 3px var(--paper), 0 2px 6px rgba(0,0,0,.2);
+}
+.edge-add .ic { width: 12px; height: 12px; }
+.edge-add:hover { transform: scale(1.12); }
