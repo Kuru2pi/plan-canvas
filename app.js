@@ -310,6 +310,7 @@ let selBlock = null;
 let selMemo = null;
 
 function setPage(p) {
+  closePopover();
   page = p;
   data.ui.page = p;
   save();
@@ -1303,7 +1304,8 @@ function renderSchedule() {
       el('button', { class: 'icon-btn', title: '次の週', onclick: () => { sch.week = addDays(sch.week, 7); renderSchedule(); } }, icon('chev')),
       el('button', { class: 'btn', onclick: () => { sch.week = sunday(todayISO()); renderSchedule(); } }, '今日'),
       el('div', { class: 'spacer' }),
-      el('span', { class: 'muted small' }, '予定をクリックで「1日の計画」へ'),
+      el('span', { class: 'muted small' }, '空いている時間をクリックで予定を追加'),
+      el('button', { class: 'btn primary', onclick: e => openEventPopover(e.clientX, e.clientY + 20, { date: days7(sch.week).includes(todayISO()) ? todayISO() : sch.week, start: 600 }) }, icon('plus'), '予定'),
     );
     box.append(tb, buildWeek());
     return;
@@ -1324,11 +1326,13 @@ function renderSchedule() {
       el('button', { class: 'icon-btn', title: '次の月', onclick: () => { sch.month = shiftMonth(sch.month, 1); renderSchedule(); } }, icon('chev')),
       el('button', { class: 'btn', onclick: () => { sch.month = todayISO().slice(0, 8) + '01'; renderSchedule(); } }, '今日'),
       el('div', { class: 'spacer' }),
-      el('span', { class: 'muted small' }, '日付をクリックで「1日の計画」へ'),
+      el('span', { class: 'muted small' }, '空いている所をクリックで予定を追加・日付の数字で「1日の計画」へ'),
+      el('button', { class: 'btn primary', onclick: e => openEventPopover(e.clientX, e.clientY + 20, { date: todayISO(), start: 600 }) }, icon('plus'), '予定'),
     );
     box.append(tb, buildCalendar());
   }
 }
+const days7 = ws => [...Array(7)].map((_, i) => addDays(ws, i));
 function shiftMonth(m, k) { const d = parseISO(m); d.setMonth(d.getMonth() + k, 1); return toISO(d); }
 
 function ganttRows() {
@@ -1516,6 +1520,72 @@ function onGanttDown(e) {
   });
 }
 
+/* ---------- quick event popover (バイト etc.) ---------- */
+let pop = null;
+function closePopover() {
+  if (!pop) return;
+  pop.remove();
+  pop = null;
+  document.removeEventListener('pointerdown', popOutside, true);
+}
+function popOutside(e) { if (pop && !pop.contains(e.target)) closePopover(); }
+function openEventPopover(x, y, opts) {
+  closePopover();
+  const b = opts.id ? data.blocks[opts.id] : null;
+  const st = {
+    date: b ? b.date : opts.date,
+    start: b ? b.start : opts.start ?? 600,
+    end: b ? b.end : Math.min(1440, (opts.start ?? 600) + 60),
+    color: b ? b.color : null,
+  };
+  const title = el('input', { class: 'inp title-inp', type: 'text', placeholder: '予定の名前（例: バイト）', value: b ? b.title : '' });
+  const dateInp = el('input', { class: 'inp', type: 'date', value: st.date });
+  let sSel, eSel;
+  sSel = timeSelect(st.start, 0, 1440 - SNAP, v => { st.start = v; if (st.end <= v) { st.end = Math.min(1440, v + 60); eSel.value = String(st.end); } });
+  eSel = timeSelect(st.end, SNAP, 1440, v => { st.end = v; if (st.start >= v) { st.start = Math.max(0, v - 60); sSel.value = String(st.start); } });
+  const chips = el('div', { class: 'presets', style: { padding: 0 } }, data.presets.map(p => el('button', {
+    class: 'preset', style: { '--c': p.color },
+    onclick: () => { title.value = p.title; st.color = p.color; title.focus(); },
+  }, el('span', { class: 'dot' }), p.title)));
+  const submit = () => {
+    const t = title.value.trim();
+    if (!t) { title.focus(); return; }
+    const preset = data.presets.find(p => p.title === t);
+    const color = (preset && preset.color) || st.color || ROUTINE_COLOR;
+    const date = dateInp.value || st.date;
+    mutate(() => {
+      if (b) Object.assign(b, { title: t, date, start: st.start, end: st.end, color });
+      else { const id = uid(); data.blocks[id] = { id, date, start: st.start, end: st.end, nodeId: null, title: t, color, memo: '' }; }
+    });
+    closePopover();
+    toast(`${fmtMDW(date)} ${fmtHM(st.start)}–${fmtHM(st.end)}「${t}」を${b ? '更新' : '追加'}しました`);
+  };
+  title.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') closePopover();
+  });
+  pop = el('div', { class: 'popover', onkeydown: e => { if (e.key === 'Escape') closePopover(); } },
+    el('div', { class: 'pop-head' }, b ? '予定を編集' : '予定を追加', el('button', { class: 'x-btn', onclick: closePopover }, icon('x'))),
+    title,
+    chips,
+    el('div', { class: 'pop-row' }, dateInp),
+    el('div', { class: 'pop-row' }, sSel, el('span', { class: 'muted' }, '〜'), eSel),
+    el('div', { class: 'pop-foot' },
+      b ? el('button', { class: 'btn danger', onclick: () => { mutate(() => { delete data.blocks[b.id]; }); closePopover(); toast('予定を削除しました（⌘Z で元に戻す）'); } }, icon('trash')) : null,
+      el('div', { style: { flex: 1 } }),
+      el('button', { class: 'btn subtle', onclick: closePopover }, 'キャンセル'),
+      el('button', { class: 'btn primary', onclick: submit }, b ? '保存' : '追加')),
+  );
+  document.body.append(pop);
+  const r = pop.getBoundingClientRect();
+  pop.style.left = clamp(x - r.width / 2, 8, innerWidth - r.width - 8) + 'px';
+  pop.style.top = (y + r.height + 12 > innerHeight ? Math.max(8, y - r.height - 12) : y + 12) + 'px';
+  setTimeout(() => document.addEventListener('pointerdown', popOutside, true));
+  title.focus();
+}
+
 function calItems() {
   const items = [];
   for (const n of allNodes()) {
@@ -1582,7 +1652,11 @@ function buildWeek() {
   for (let h = 1; h < 24; h++) grid.append(el('div', { class: 'hour', style: { top: h * H + 'px', left: -G + 'px' } }, el('span', null, `${pad(h)}:00`)));
   days.forEach((d, i) => {
     const colEl = el('div', { class: `wv-col${d === today ? ' today' : ''}`, style: { left: `${i / 7 * 100}%`, width: `${100 / 7}%` },
-      ondblclick: e => { if (!e.target.closest('.blk')) { setDayDate(d); setPage('day'); } } });
+      onclick: e => {
+        if (e.target.closest('.blk')) return;
+        const m = clamp(Math.floor((e.clientY - colEl.getBoundingClientRect().top) / H * 2) * 30, 0, 1380);
+        openEventPopover(e.clientX, e.clientY, { date: d, start: m });
+      } });
     const bl = blocksOn(d);
     const lay = layoutBlocks(bl);
     for (const b of bl) {
@@ -1592,7 +1666,10 @@ function buildWeek() {
         class: `blk${node ? '' : ' routine'}${dur < 45 ? ' small' : ''}${node && node.done ? ' done' : ''}`,
         style: { '--c': blockColor(b), top: b.start / 60 * H + 'px', height: Math.max(dur / 60 * H - 2, 9) + 'px', left: `calc(${col / cnt * 100}% + 1px)`, width: `calc(${100 / cnt}% - 3px)` },
         title: `${blockTitle(b)}  ${fmtHM(b.start)}–${fmtHM(b.end)}`,
-        onclick: () => { setDayDate(d); selBlock = b.id; setPage('day'); },
+        onclick: e => {
+          if (node) { setDayDate(d); selBlock = b.id; setPage('day'); }
+          else openEventPopover(e.clientX, e.clientY, { id: b.id });
+        },
       }, el('div', { class: 'bt' }, blockTitle(b)), dur >= 60 ? el('div', { class: 'bm' }, `${fmtHM(b.start)}–${fmtHM(b.end)}`) : null));
     }
     if (d === today) colEl.append(el('div', { class: 'now', style: { top: nowMin() / 60 * H + 'px', left: 0 } }));
@@ -1628,14 +1705,32 @@ function buildCalendar() {
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i);
       const mins = minutesByDay[d];
-      row.append(el('div', { class: `cal-day${d.slice(0, 7) !== m.slice(0, 7) ? ' out' : ''}${d === today ? ' today' : ''}` },
+      row.append(el('div', {
+        class: `cal-day${d.slice(0, 7) !== m.slice(0, 7) ? ' out' : ''}${d === today ? ' today' : ''}`,
+        title: 'クリックで予定を追加',
+        onclick: e => { if (!e.target.closest('.cal-num')) openEventPopover(e.clientX, e.clientY, { date: d, start: 600 }); },
+      },
         el('div', { class: 'cal-dh' },
           el('button', { class: 'cal-num', title: 'この日の計画を開く', onclick: () => { dayS.date = d; setPage('day'); } }, parseISO(d).getDate()),
           mins ? el('span', { class: 'cal-hrs' }, fmtH(mins)) : null)));
     }
     const { bars, lanes } = weekBars(items, ws, { top: LANE_TOP, laneH: LANE_H, maxLanes: MAX_LANES });
     row.append(...bars);
-    row.style.minHeight = Math.max(128, LANE_TOP + lanes * LANE_H + 8) + 'px';
+    // 予定 (non-task blocks such as バイト) listed under the task bars
+    const evTop = LANE_TOP + lanes * LANE_H + 2, EV_H = 19, MAX_EV = 4;
+    let most = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ws, i);
+      const evs = blocksOn(d).filter(b => !linkedNode(b)).sort((a, b) => a.start - b.start);
+      most = Math.max(most, Math.min(evs.length, MAX_EV + 1));
+      evs.slice(0, MAX_EV).forEach((b, k) => row.append(el('div', {
+        class: 'cal-ev', style: { '--c': blockColor(b), top: evTop + k * EV_H + 'px', left: `calc(${i / 7 * 100}% + 3px)`, width: `calc(${100 / 7}% - 6px)` },
+        title: `${b.title}  ${fmtHM(b.start)}–${fmtHM(b.end)}`,
+        onclick: e => openEventPopover(e.clientX, e.clientY, { id: b.id }),
+      }, el('span', { class: 'ev-t' }, fmtHM(b.start)), b.title || '無題の予定')));
+      if (evs.length > MAX_EV) row.append(el('div', { class: 'cal-more', style: { top: evTop + MAX_EV * EV_H + 'px', left: `${i / 7 * 100}%` } }, `+${evs.length - MAX_EV}件`));
+    }
+    row.style.minHeight = Math.max(128, evTop + most * EV_H + 10) + 'px';
     wrap.append(row);
   }
   return wrap;
@@ -2074,9 +2169,9 @@ function nodeInspector(n) {
   );
   const t = todayISO();
   dsec.append(el('div', { class: 'btns', style: { marginTop: '8px' } },
-    el('button', { class: 'btn sm ghost', onclick: () => mutate(() => { n.due = t; }) }, '今日'),
-    el('button', { class: 'btn sm ghost', onclick: () => mutate(() => { n.due = addDays(t, 7); }) }, '1週間後'),
-    el('button', { class: 'btn sm ghost', onclick: () => mutate(() => { n.start = t; n.end = addDays(t, 6); }) }, '今日から1週間'),
+    el('button', { class: 'btn sm subtle', onclick: () => mutate(() => { n.due = t; }) }, '今日'),
+    el('button', { class: 'btn sm subtle', onclick: () => mutate(() => { n.due = addDays(t, 7); }) }, '1週間後'),
+    el('button', { class: 'btn sm subtle', onclick: () => mutate(() => { n.start = t; n.end = addDays(t, 6); }) }, '今日から1週間'),
   ));
   if (n.due) {
     const i = dueInfo(n.due, n.done);

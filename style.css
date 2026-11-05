@@ -238,8 +238,8 @@ textarea.inp { height: auto; min-height: 84px; padding: 8px 9px; resize: vertica
 .btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
 .btn.danger { color: var(--hot); }
 .btn.danger:hover { background: var(--hot-bg); border-color: #f3c7bc; }
-.btn.ghost { border-color: transparent; color: var(--text-2); }
-.btn.ghost:hover { color: var(--text); }
+.btn.subtle { border-color: transparent; color: var(--text-2); }
+.btn.subtle:hover { color: var(--text); }
 .btn.sm { height: 24px; padding: 0 8px; font-size: 11px; }
 .btns { display: flex; flex-wrap: wrap; gap: 6px; }
 .x-btn { width: 22px; height: 22px; border-radius: 5px; color: var(--text-3); display: inline-flex; align-items: center; justify-content: center; }
@@ -540,3 +540,23 @@ kbd {
 .g-row.row-into .g-label { box-shadow: inset 0 0 0 2px var(--accent); }
 body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-select: none; }
 .layer-row, .g-label { user-select: none; -webkit-user-select: none; }
+
+/* ---------- quick event popover ---------- */
+.popover {
+  position: fixed; z-index: 150; width: 300px; padding: 14px; border-radius: 12px;
+  background: var(--panel); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 10px;
+}
+.pop-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--text-2); }
+.popover .title-inp { margin: 0; width: 100%; padding: 0 9px; background: var(--hover); font-size: 14px; }
+.popover .preset { height: 24px; padding: 0 9px; font-size: 11.5px; cursor: pointer; }
+.pop-row { display: flex; align-items: center; gap: 6px; }
+.pop-foot { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.cal-day { cursor: copy; }
+.cal-ev {
+  position: absolute; height: 18px; line-height: 18px; padding: 0 5px; border-radius: 4px; font-size: 11px;
+  display: flex; gap: 4px; align-items: center; overflow: hidden; white-space: nowrap; cursor: pointer; color: var(--text);
+}
+.cal-ev::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c); flex: none; }
+.cal-ev:hover { background: var(--hover); }
+.cal-ev .ev-t { color: var(--text-3); font-variant-numeric: tabular-nums; font-size: 10.5px; }
+.wv-col { cursor: copy; }
