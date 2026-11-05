@@ -215,6 +215,7 @@ let saveTimer;
 function flushSave() {
   clearTimeout(saveTimer);
   try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { toast('保存できませんでした'); }
+  if (typeof syncNotify === 'function') syncNotify();
 }
 function save() { clearTimeout(saveTimer); saveTimer = setTimeout(flushSave, 200); }
 window.addEventListener('beforeunload', flushSave);
