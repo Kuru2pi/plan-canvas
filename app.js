@@ -1363,7 +1363,7 @@ function renderLayers() {
           ? el('button', { class: 'arrow' + (c.collapsed ? '' : ' open'), onclick: ev => { ev.stopPropagation(); toggleFold(c.id); } }, icon('chev'))
           : el('span', { class: 'arrow' }),
         el('span', { class: isRoot ? 'sq' : 'dot', style: { background: colorOf(c) } }),
-        el('span', { class: 'lt' }, c.title),
+        el('span', { class: 'lt', title: c.title }, c.title),
         c.due ? el('span', { class: 'ld' + (isUrgent(c) ? ' hot' : '') }, fmtMD(c.due)) : null,
       ));
       if (!c.collapsed) walk(c.id, depth + 1);
@@ -1458,7 +1458,7 @@ function buildGantt() {
   const W = days * dayW;
   sch.ctx = { start, dayW, days };
 
-  const wrap = el('div', { class: 'g-wrap' });
+  const wrap = el('div', { class: 'g-wrap', style: { '--lw': LW + 'px' } });
   const inner = el('div', { class: 'g-inner', style: { width: LW + W + 'px' } });
 
   // header
@@ -1470,7 +1470,7 @@ function buildGantt() {
       const d0 = parseISO(addDays(start, segStart));
       const w = (i - segStart) * dayW;
       th.append(el('div', { class: 'g-month', style: { left: segStart * dayW + 'px', width: w + 'px' } },
-        w > 50 ? `${d0.getFullYear()}年${d0.getMonth() + 1}月` : `${d0.getMonth() + 1}月`));
+        el('span', { class: 'gm-t', style: { left: LW + 8 + 'px' } }, w > 70 ? `${d0.getFullYear()}年${d0.getMonth() + 1}月` : `${d0.getMonth() + 1}月`)));
       segStart = i;
     }
     if (i === days) break;
@@ -1515,7 +1515,7 @@ function ganttRow({ n, depth, hasKids }, W) {
   const c = colorOf(n);
   const isRoot = !parentOf(n);
   const folded = sch.fold.has(n.id);
-  const label = el('div', { class: 'g-label', style: { width: LW + 'px', paddingLeft: 8 + depth * 16 + 'px', '--c': c } },
+  const label = el('div', { class: 'g-label', style: { width: LW + 'px', paddingLeft: 6 + depth * (isMobile() ? 9 : 16) + 'px', '--c': c } },
     hasKids
       ? el('button', { class: 'fold-btn' + (folded ? '' : ' open'), 'data-fold': n.id }, icon('chev'))
       : el('span', { class: 'fold-btn' }),
@@ -1801,7 +1801,8 @@ function buildCalendar() {
   const minutesByDay = {};
   for (const b of Object.values(data.blocks)) minutesByDay[b.date] = (minutesByDay[b.date] || 0) + b.end - b.start;
 
-  const LANE_TOP = 32, LANE_H = 22, MAX_LANES = 4;
+  const compact = isMobile();
+  const LANE_TOP = compact ? 28 : 32, LANE_H = compact ? 17 : 22, MAX_LANES = compact ? 3 : 4;
   for (let w = 0; w < weeks; w++) {
     const ws = addDays(gridStart, w * 7);
     const row = el('div', { class: 'cal-week' });
@@ -1811,7 +1812,12 @@ function buildCalendar() {
       row.append(el('div', {
         class: `cal-day${d.slice(0, 7) !== m.slice(0, 7) ? ' out' : ''}${d === today ? ' today' : ''}`,
         title: 'クリックで予定を追加',
-        onclick: e => { if (!e.target.closest('.cal-num')) openEventPopover(e.clientX, e.clientY, { date: d, start: 600 }); },
+        'data-date': d,
+        onclick: e => {
+          if (e.target.closest('.cal-num')) return;
+          if (isMobile()) { sch.calDay = d; renderSchedule(); }
+          else openEventPopover(e.clientX, e.clientY, { date: d, start: 600 });
+        },
       },
         el('div', { class: 'cal-dh' },
           el('button', { class: 'cal-num', title: 'この日の計画を開く', onclick: () => { dayS.date = d; setPage('day'); } }, parseISO(d).getDate()),
@@ -1820,7 +1826,7 @@ function buildCalendar() {
     const { bars, lanes } = weekBars(items, ws, { top: LANE_TOP, laneH: LANE_H, maxLanes: MAX_LANES });
     row.append(...bars);
     // 予定 (non-task blocks such as バイト) listed under the task bars
-    const evTop = LANE_TOP + lanes * LANE_H + 2, EV_H = 19, MAX_EV = 4;
+    const evTop = LANE_TOP + lanes * LANE_H + 2, EV_H = compact ? 16 : 19, MAX_EV = compact ? 2 : 4;
     let most = 0;
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i);
@@ -1833,10 +1839,44 @@ function buildCalendar() {
       }, el('span', { class: 'ev-t' }, fmtHM(b.start)), b.title || '無題の予定')));
       if (evs.length > MAX_EV) row.append(el('div', { class: 'cal-more', style: { top: evTop + MAX_EV * EV_H + 'px', left: `${i / 7 * 100}%` } }, `+${evs.length - MAX_EV}件`));
     }
-    row.style.minHeight = Math.max(128, evTop + most * EV_H + 10) + 'px';
+    row.style.minHeight = Math.max(compact ? 72 : 128, evTop + most * EV_H + (compact ? 4 : 10)) + 'px';
     wrap.append(row);
   }
+  if (isMobile()) {
+    const d = sch.calDay || todayISO();
+    $$('.cal-day', wrap).forEach(c => c.classList.toggle('picked', c.dataset.date === d));
+    wrap.append(dayAgenda(d, items));
+  }
   return wrap;
+}
+
+// list of everything on one day, used under the phone calendar
+function dayAgenda(d, items) {
+  const box = el('div', { class: 'agenda' });
+  box.append(el('div', { class: 'ag-head' },
+    el('div', { class: 'ag-date' }, fmtMDW(d), d === todayISO() ? el('span', { class: 'tag' }, '今日') : null),
+    el('button', { class: 'btn', onclick: () => { setDayDate(d); setPage('day'); } }, icon('clock'), '1日の計画'),
+    el('button', { class: 'btn primary', onclick: e => openEventPopover(e.clientX, e.clientY, { date: d, start: 600 }) }, icon('plus'), '予定')));
+  const bl = blocksOn(d).sort((a, b) => a.start - b.start);
+  const tasks = items.filter(it => it.s <= d && d <= it.e);
+  if (!bl.length && !tasks.length) { box.append(el('div', { class: 'empty ag-empty' }, '予定はありません')); return box; }
+  for (const b of bl) {
+    const node = linkedNode(b);
+    box.append(el('button', {
+      class: 'ag-item', style: { '--c': blockColor(b) },
+      onclick: e => { if (node) { setDayDate(d); selBlock = b.id; setPage('day'); } else openEventPopover(e.clientX, e.clientY, { id: b.id }); },
+    }, el('span', { class: 'ag-time' }, fmtHM(b.start), el('br'), el('span', { class: 'faint' }, fmtHM(b.end))),
+      el('span', { class: 'ag-body' }, el('span', { class: 'ag-t' }, blockTitle(b)), node && parentOf(node) ? el('span', { class: 'ag-s' }, rootOf(node).title) : null)));
+  }
+  for (const it of tasks) {
+    const n = it.n;
+    const hot = it.kind === 'due' && isUrgent(n);
+    box.append(el('button', { class: 'ag-item task', style: { '--c': colorOf(n) }, onclick: () => selectOnly(n.id) },
+      el('span', { class: 'ag-time' + (hot ? ' hot-text' : '') }, it.kind === 'due' ? '締切' : '期間'),
+      el('span', { class: 'ag-body' }, el('span', { class: 'ag-t' + (n.done ? ' done' : '') }, n.title),
+        el('span', { class: 'ag-s' }, parentOf(n) ? rootOf(n).title + ' · ' : '', it.kind === 'due' ? dueInfo(n.due, n.done).txt : `${fmtMD(it.s)}–${fmtMD(it.e)}`))));
+  }
+  return box;
 }
 
 /* =========================================================
@@ -2127,21 +2167,29 @@ function relevantOn(n, d) {
   if (n.due && d <= n.due && diffDays(d, n.due) <= 7) return true;
   return false;
 }
+function dueLabel(n) {
+  if (n.due) return { txt: isUrgent(n) ? `締切 ${dueInfo(n.due, n.done).txt}` : `締切 ${fmtMD(n.due)}`, hot: isUrgent(n) };
+  if (n.end) return { txt: `〜${fmtMD(n.end)}`, hot: false };
+  return null;
+}
 function palItem(n, depth, opts = {}) {
   const c = colorOf(n);
   const isRoot = !parentOf(n);
-  let meta = null;
-  if (n.due) meta = el('span', { class: 'pm' + (isUrgent(n) ? ' soon' : '') }, isUrgent(n) ? `締切 ${dueInfo(n.due, n.done).txt}` : `締切 ${fmtMD(n.due)}`);
-  else if (n.end) meta = el('span', { class: 'pm' }, `〜${fmtMD(n.end)}`);
+  const dl = dueLabel(n);
+  // with a path the item gets a second line, so the title itself never has to be cut short
+  const body = opts.path
+    ? el('span', { class: 'pt2' }, el('span', { class: 'pt' }, n.title),
+      el('span', { class: 'ps' }, rootOf(n).title, dl ? ' · ' : '', dl ? el('span', { class: dl.hot ? 'hot-text' : '' }, dl.txt) : null))
+    : el('span', { class: 'pt' }, n.title);
   const it = el('div', {
-    class: `pal-item${isRoot ? ' root' : ''}`, draggable: 'true',
+    class: `pal-item${isRoot ? ' root' : ''}${opts.path ? ' two' : ''}`, draggable: 'true',
     style: { paddingLeft: 8 + depth * 14 + 'px' },
     title: 'ドラッグで時間割に配置／クリックで空き時間に追加',
     onclick: () => quickAdd({ nodeId: n.id }),
   },
     isRoot ? el('span', { class: 'sq', style: { background: c } }) : el('span', { class: 'dot', style: { background: c } }),
-    el('span', { class: 'pt' }, opts.path ? el('span', { class: 'muted' }, rootOf(n).title + ' / ') : null, n.title),
-    meta);
+    body,
+    !opts.path && dl ? el('span', { class: 'pm' + (dl.hot ? ' soon' : '') }, dl.txt) : null);
   it.addEventListener('dragstart', e => {
     e.dataTransfer.setData('text/plain', JSON.stringify({ nodeId: n.id }));
     e.dataTransfer.effectAllowed = 'copy';
@@ -2402,10 +2450,11 @@ function multiInspector(ids) {
 }
 
 function taskListItem(n, metaText, cls) {
-  return el('div', { class: 'list-item', onclick: () => { if (page === 'map') { selectOnly(n.id); centerOn(n.id); } else selectOnly(n.id); } },
+  return el('div', { class: 'list-item two', onclick: () => { if (page === 'map') { selectOnly(n.id); centerOn(n.id); } else selectOnly(n.id); } },
     el('span', { class: 'dot', style: { background: colorOf(n) } }),
-    el('span', { class: 'li-t' }, n.title, parentOf(n) ? el('span', { class: 'muted' }, `  ${rootOf(n).title}`) : null),
-    el('span', { class: 'li-m ' + (cls || '') }, metaText));
+    el('span', { class: 'li-body' },
+      el('span', { class: 'li-t' }, n.title),
+      el('span', { class: 'li-s' }, parentOf(n) ? rootOf(n).title : 'プロジェクト', metaText ? ' · ' : '', el('span', { class: 'li-m ' + (cls || '') }, metaText))));
 }
 
 function overviewInspector() {
