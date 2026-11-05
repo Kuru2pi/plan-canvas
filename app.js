@@ -106,17 +106,25 @@ function trackPointer(e, move, up) {
    Data
    ========================================================= */
 const KEY = 'plan-canvas-v1';
-const COLORS = ['#0D99FF', '#9747FF', '#FF24BD', '#F24822', '#FFA629', '#E8B500', '#14AE5C', '#00B5CE', '#667799'];
-const DEFAULT_COLOR = '#667799';
+// muted project colors: used only as small markers and soft tints
+const COLORS = ['#4F7FD9', '#8A63D2', '#CF5C8E', '#D4643F', '#C8962B', '#4F9673', '#3A8FA3', '#737985'];
+const DEFAULT_COLOR = '#737985';
+const ROUTINE_COLOR = '#9A968F';
 const DEFAULT_PRESETS = [
-  { title: '睡眠', color: '#667799' },
-  { title: '食事', color: '#FFA629' },
-  { title: '授業', color: '#9747FF' },
-  { title: 'バイト', color: '#FF24BD' },
-  { title: '移動', color: '#8C8C8C' },
-  { title: '休憩', color: '#14AE5C' },
-  { title: '自由時間', color: '#00B5CE' },
+  { title: '睡眠', color: '#737985' },
+  { title: '食事', color: '#C8962B' },
+  { title: '授業', color: '#8A63D2' },
+  { title: 'バイト', color: '#CF5C8E' },
+  { title: '移動', color: ROUTINE_COLOR },
+  { title: '休憩', color: '#4F9673' },
+  { title: '自由時間', color: '#3A8FA3' },
 ];
+// colors from the first version, mapped onto the muted palette
+const LEGACY_COLORS = {
+  '#0D99FF': '#4F7FD9', '#9747FF': '#8A63D2', '#FF24BD': '#CF5C8E', '#F24822': '#D4643F', '#FFA629': '#C8962B',
+  '#E8B500': '#C8962B', '#14AE5C': '#4F9673', '#00B5CE': '#3A8FA3', '#667799': '#737985', '#8C8C8C': ROUTINE_COLOR,
+};
+const migrateColor = c => (c && LEGACY_COLORS[c.toUpperCase()]) || c;
 
 function sampleData() {
   const t = todayISO();
@@ -168,7 +176,7 @@ function sampleData() {
   blk(15, 18, { title: 'バイト', color: '#FF24BD' });
   blk(19, 19.5, { title: '食事', color: '#FFA629' });
   blk(20, 21.5, { nodeId: pf });
-  return d;
+  return normalize(d);
 }
 
 function normalize(d) {
@@ -178,6 +186,9 @@ function normalize(d) {
   d.settings = Object.assign({ autoLayout: true }, d.settings);
   d.presets = d.presets || DEFAULT_PRESETS.map(p => ({ ...p }));
   d.ui = d.ui || { page: 'map' };
+  for (const n of Object.values(d.nodes)) n.color = migrateColor(n.color);
+  for (const b of Object.values(d.blocks)) b.color = migrateColor(b.color);
+  for (const p of d.presets) p.color = migrateColor(p.color);
   return d;
 }
 
@@ -406,15 +417,11 @@ function buildDock() {
     tool('hand', 'hand', '手のひら (H)'),
     el('div', { class: 'sep' }),
     el('button', { title: '新しいプロジェクト', onclick: () => createRootAtCenter() }, icon('plus'), 'プロジェクト'),
-    el('button', {
-      title: '選択中のタスクに子タスクを追加 (Tab)',
-      onclick: () => { const id = [...sel][0]; if (id) addChild(id); else toast('先にタスクを選択してください'); },
-    }, icon('plus'), '子タスク'),
     el('div', { class: 'sep' }),
     el('button', {
       class: data.settings.autoLayout ? 'on' : '', title: '自動整列のオン/オフ',
       onclick: () => { data.settings.autoLayout = !data.settings.autoLayout; save(); buildDock(); renderMap(); toast(data.settings.autoLayout ? '自動整列: オン' : '自動整列: オフ（自由に配置できます）'); },
-    }, icon('layout'), '自動整列'),
+    }, icon('layout'), '整列'),
     el('div', { class: 'sep' }),
     el('button', { title: 'ズームアウト', onclick: () => zoomAt(1 / 1.2) }, icon('minus')),
     el('button', { class: 'zoom', id: 'zoomLbl', title: '100%に戻す (⇧0)', onclick: () => zoomTo(1) }, Math.round(data.view.z * 100) + '%'),
@@ -477,26 +484,25 @@ function ensureVisible(id) {
   if (sx < m || sy < m || sx + b.w * v.z > r.width - m || sy + b.h * v.z > r.height - 90) centerOn(id);
 }
 
+function isUrgent(n) {
+  if (!n.due || n.done) return false;
+  return diffDays(todayISO(), n.due) <= 3;
+}
 function metaChips(n) {
-  const chips = [];
-  const t = todayISO();
+  const parts = [];
   if (n.start || n.end) {
     const s = n.start || n.end, e = n.end || n.start;
-    const active = !n.done && s <= t && t <= e;
-    chips.push(el('span', { class: 'chip' + (active ? ' active' : '') }, icon('cal'), s === e ? fmtMD(s) : `${fmtMD(s)}–${fmtMD(e)}`));
+    parts.push(el('span', null, s === e ? fmtMD(s) : `${fmtMD(s)}–${fmtMD(e)}`));
   }
   if (n.due) {
     const i = dueInfo(n.due, n.done);
-    chips.push(el('span', { class: 'chip ' + i.cls }, icon('flag'), `${fmtMD(n.due)}・${i.txt}`));
+    parts.push(isUrgent(n)
+      ? el('span', { class: 'hot ' + i.cls }, `締切 ${i.txt}`)
+      : el('span', null, `締切 ${fmtMD(n.due)}`));
   }
   const ds = descendants(n.id);
-  if (ds.length) {
-    const d = ds.filter(k => k.done).length;
-    chips.push(el('span', { class: 'chip' }, el('i', { class: 'pbar' }, el('b', { style: { width: (d / ds.length * 100) + '%' } })), `${d}/${ds.length}`));
-  }
-  const sm = scheduledMin([n.id]);
-  if (n.estimate || sm) chips.push(el('span', { class: 'chip' }, icon('clock'), n.estimate ? `${fmtH(sm)} / ${n.estimate}h` : fmtH(sm)));
-  return chips.length ? el('div', { class: 'meta' }, chips) : null;
+  if (ds.length) parts.push(el('span', null, `${ds.filter(k => k.done).length}/${ds.length}`));
+  return parts.length ? el('div', { class: 'meta' }, parts) : null;
 }
 
 function nodeEl(n) {
@@ -504,11 +510,13 @@ function nodeEl(n) {
   const kids = childrenOf(n.id);
   const stop = e => e.stopPropagation();
   const e = el('div', {
-    class: `node${isRoot ? ' root' : ''}${sel.has(n.id) ? ' selected' : ''}${n.done ? ' done' : ''}`,
+    class: `node${isRoot ? ' root' : ''}${sel.has(n.id) ? ' selected' : ''}${n.done ? ' done' : ''}${dueInfo(n.due || '9999-01-01', n.done).cls === 'overdue' ? ' urgent' : ''}`,
     'data-id': n.id,
     style: { left: n.x + 'px', top: n.y + 'px', '--c': colorOf(n) },
   },
-    el('button', { class: 'chk', title: '完了にする (⌘Enter)', onpointerdown: stop, ondblclick: stop, onclick: () => toggleDone(n.id) }, icon('check')),
+    isRoot
+      ? el('span', { class: 'proj' })
+      : el('button', { class: 'chk', title: '完了にする (⌘Enter)', onpointerdown: stop, ondblclick: stop, onclick: () => toggleDone(n.id) }, icon('check')),
     el('div', { class: 'body' }, el('div', { class: 'title' }, n.title || '無題'), metaChips(n)),
     el('button', { class: 'add', title: '子タスクを追加 (Tab)', onpointerdown: stop, ondblclick: stop, onclick: () => addChild(n.id) }, icon('plus')),
     kids.length ? el('button', {
@@ -555,8 +563,7 @@ function drawEdges() {
     let x1, x2;
     if (n.x + cw / 2 >= p.x + pw / 2) { x1 = p.x + pw; x2 = n.x; } else { x1 = p.x; x2 = n.x + cw; }
     const dx = (x2 - x1) / 2;
-    const c = colorOf(n);
-    out += `<path d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}" stroke="${c}" stroke-opacity="${n.done ? 0.3 : 0.6}"/>`;
+    out += `<path${n.done ? ' class="done"' : ''} d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"/>`;
   }
   mm.svg.innerHTML = out;
 }
@@ -883,7 +890,7 @@ function renderLayers() {
           : el('span', { class: 'arrow' }),
         el('span', { class: isRoot ? 'sq' : 'dot', style: { background: colorOf(c) } }),
         el('span', { class: 'lt' }, c.title),
-        c.due ? el('span', { class: 'ld' }, fmtMD(c.due)) : null,
+        c.due ? el('span', { class: 'ld' + (isUrgent(c) ? ' hot' : '') }, fmtMD(c.due)) : null,
       ));
       if (!c.collapsed) walk(c.id, depth + 1);
     }
@@ -1023,7 +1030,7 @@ function ganttRow({ n, depth, hasKids }, W) {
     isRoot ? el('span', { class: 'sq', style: { background: c } })
       : el('button', { class: 'chk' + (n.done ? ' on' : ''), 'data-done': n.id }, icon('check')),
     el('span', { class: 'gl-t', title: n.title }, n.title),
-    n.due ? el('span', { class: 'gl-d' }, fmtMD(n.due)) : null,
+    n.due ? el('span', { class: 'gl-d' + (isUrgent(n) ? ' hot' : '') }, fmtMD(n.due)) : null,
   );
   const track = el('div', { class: 'g-track', style: { width: W + 'px' } });
 
@@ -1042,15 +1049,15 @@ function ganttRow({ n, depth, hasKids }, W) {
     const dates = ds.flatMap(d => [d.start, d.end, d.due]).filter(Boolean);
     if (dates.length) {
       const s = dates.reduce(minISO), e = dates.reduce(maxISO);
-      track.append(el('div', { class: 'g-sum', style: { left: diffDays(start, s) * dayW + 'px', width: (diffDays(s, e) + 1) * dayW + 'px', '--c': c } }));
+      track.append(el('div', { class: 'g-sum', style: { left: diffDays(start, s) * dayW + 'px', width: (diffDays(s, e) + 1) * dayW + 'px' } }));
     }
   }
   if (n.due) {
     const x = diffDays(start, n.due) * dayW + dayW / 2;
     const info = dueInfo(n.due, n.done);
     track.append(
-      el('div', { class: `g-due${info.cls === 'overdue' ? ' overdue' : ''}${n.done ? ' done' : ''}`, 'data-id': n.id, 'data-mode': 'due', style: { left: x - 7 + 'px', '--c': c }, title: `締切 ${fmtMDW(n.due)}（${info.txt}）` }),
-      !(n.start || n.end) ? el('div', { class: 'g-due-lbl', style: { left: x + 12 + 'px' } }, `${n.title}・締切`) : null,
+      el('div', { class: `g-due${isUrgent(n) ? ' hot' : ''}${n.done ? ' done' : ''}`, 'data-id': n.id, 'data-mode': 'due', style: { left: x - 7 + 'px', '--c': c }, title: `締切 ${fmtMDW(n.due)}（${info.txt}）` }),
+      !(n.start || n.end) ? el('div', { class: 'g-due-lbl' + (isUrgent(n) ? ' hot' : ''), style: { left: x + 12 + 'px' } }, isUrgent(n) ? `${n.title}・締切 ${info.txt}` : n.title) : null,
     );
   }
   return el('div', {
@@ -1132,7 +1139,9 @@ function buildCalendar() {
 
   const items = [];
   for (const n of allNodes()) {
-    if (n.start || n.end) items.push({ n, s: n.start || n.end, e: n.end || n.start, kind: 'period' });
+    // a parent's period just summarises its children, so only show the most detailed level
+    const summarised = descendants(n.id).some(d => d.start || d.end);
+    if ((n.start || n.end) && !summarised) items.push({ n, s: n.start || n.end, e: n.end || n.start, kind: 'period' });
     if (n.due) items.push({ n, s: n.due, e: n.due, kind: 'due' });
   }
   const minutesByDay = {};
@@ -1164,7 +1173,7 @@ function buildCalendar() {
       const n = sg.n, c = colorOf(n);
       const info = sg.kind === 'due' ? dueInfo(n.due, n.done) : null;
       row.append(el('div', {
-        class: `cal-bar${sg.kind === 'due' ? ' due' : ''}${info && info.cls === 'overdue' ? ' overdue' : ''}${n.done ? ' done' : ''}${sg.a > sg.s ? ' cont-l' : ''}${sg.b < sg.e ? ' cont-r' : ''}${sel.has(n.id) ? ' sel' : ''}`,
+        class: `cal-bar${sg.kind === 'due' ? ' due' : ''}${info && isUrgent(n) ? ' hot' : ''}${n.done ? ' done' : ''}${sg.a > sg.s ? ' cont-l' : ''}${sg.b < sg.e ? ' cont-r' : ''}${sel.has(n.id) ? ' sel' : ''}`,
         'data-id': n.id,
         style: {
           '--c': c, top: LANE_TOP + li * LANE_H + 'px',
@@ -1173,7 +1182,7 @@ function buildCalendar() {
         title: sg.kind === 'due' ? `締切: ${n.title}` : `${n.title}  ${fmtMD(sg.s)}–${fmtMD(sg.e)}`,
         onclick: () => selectOnly(n.id),
         ondblclick: () => revealNode(n.id),
-      }, sg.kind === 'due' ? icon('flag') : null, n.title));
+      }, n.title));
     }
     hidden.forEach((h, i) => {
       if (h) row.append(el('div', { class: 'cal-more', style: { top: LANE_TOP + MAX_LANES * LANE_H + 'px', left: `${i / 7 * 100}%` } }, `+${h}件`));
@@ -1191,7 +1200,7 @@ const dayS = { date: todayISO(), hourH: 48, scrollEl: null, lane: null, ghost: n
 const SNAP = 15;
 const blocksOn = date => Object.values(data.blocks).filter(b => b.date === date);
 const linkedNode = b => (b.nodeId && data.nodes[b.nodeId]) || null;
-const blockColor = b => { const n = linkedNode(b); return n ? colorOf(n) : (b.color || DEFAULT_COLOR); };
+const blockColor = b => { const n = linkedNode(b); return n ? colorOf(n) : '#D6D2CA'; };
 const blockTitle = b => { const n = linkedNode(b); return n ? n.title : (b.title || '無題の予定'); };
 
 function renderDay() { renderPalette(); renderDayMain(); }
@@ -1222,13 +1231,11 @@ function renderDayMain() {
     const day = addDays(ws, i);
     const bl = blocksOn(day);
     const total = bl.reduce((s, b) => s + b.end - b.start, 0);
-    const bar = el('div', { class: 'wb' });
-    for (const b of bl.sort((a, c) => a.start - c.start)) bar.append(el('i', { style: { width: (b.end - b.start) / 1440 * 100 + '%', background: blockColor(b) } }));
+    const bar = el('div', { class: 'wb' }, el('i', { style: { width: Math.min(100, total / 1440 * 100) + '%' } }));
     strip.append(el('div', { class: `wk${day === d ? ' on' : ''}${day === today ? ' today' : ''}`, onclick: () => setDayDate(day) },
       el('div', { class: 'wd' }, WD[parseISO(day).getDay()]),
       el('div', { class: 'wn' }, fmtMD(day)),
-      bar,
-      el('div', { class: 'wh' }, total ? `${fmtH(total)} 計画済み` : '—')));
+      bar));
   }
   box.append(strip);
 
@@ -1325,7 +1332,7 @@ function renderBlocks() {
     const node = linkedNode(b);
     const proj = node && parentOf(node) ? rootOf(node).title : null;
     lane.append(el('div', {
-      class: `blk${selBlock === b.id ? ' sel' : ''}${small ? ' small' : ''}${node && node.done ? ' done' : ''}`,
+      class: `blk${node ? '' : ' routine'}${selBlock === b.id ? ' sel' : ''}${small ? ' small' : ''}${node && node.done ? ' done' : ''}`,
       'data-id': b.id,
       style: {
         '--c': blockColor(b), top: b.start / 60 * H + 'px', height: Math.max(dur / 60 * H - 2, 10) + 'px',
@@ -1462,7 +1469,7 @@ function palItem(n, depth, opts = {}) {
   const c = colorOf(n);
   const isRoot = !parentOf(n);
   let meta = null;
-  if (n.due) { const i = dueInfo(n.due, n.done); meta = el('span', { class: 'pm ' + i.cls }, `締切 ${fmtMD(n.due)}`); }
+  if (n.due) meta = el('span', { class: 'pm' + (isUrgent(n) ? ' soon' : '') }, isUrgent(n) ? `締切 ${dueInfo(n.due, n.done).txt}` : `締切 ${fmtMD(n.due)}`);
   else if (n.end) meta = el('span', { class: 'pm' }, `〜${fmtMD(n.end)}`);
   const it = el('div', {
     class: `pal-item${isRoot ? ' root' : ''}`, draggable: 'true',
@@ -1470,7 +1477,7 @@ function palItem(n, depth, opts = {}) {
     title: 'ドラッグで時間割に配置／クリックで空き時間に追加',
     onclick: () => quickAdd({ nodeId: n.id }),
   },
-    el('span', { class: isRoot ? 'sq' : 'dot', style: { background: c } }),
+    isRoot ? el('span', { class: 'sq', style: { background: c } }) : el('span', { class: 'dot', style: { background: c } }),
     el('span', { class: 'pt' }, opts.path ? el('span', { class: 'muted' }, rootOf(n).title + ' / ') : null, n.title),
     meta);
   it.addEventListener('dragstart', e => {
@@ -1502,7 +1509,7 @@ function renderPalette() {
   const presets = el('div', { class: 'presets' });
   data.presets.forEach((p, i) => {
     const chip = el('div', {
-      class: 'preset', draggable: 'true', style: { '--c': p.color }, title: 'ドラッグで配置／クリックで追加／右クリックで削除',
+      class: 'preset', draggable: 'true', style: { '--c': ROUTINE_COLOR }, title: 'ドラッグで配置／クリックで追加／右クリックで削除',
       onclick: () => quickAdd({ title: p.title, color: p.color }),
       oncontextmenu: e => {
         e.preventDefault();
@@ -1618,9 +1625,9 @@ function nodeInspector(n) {
   );
   const t = todayISO();
   dsec.append(el('div', { class: 'btns', style: { marginTop: '8px' } },
-    el('button', { class: 'btn sm', onclick: () => mutate(() => { n.due = t; }) }, '締切: 今日'),
-    el('button', { class: 'btn sm', onclick: () => mutate(() => { n.due = addDays(t, 7); }) }, '締切: 1週間後'),
-    el('button', { class: 'btn sm', onclick: () => mutate(() => { n.start = t; n.end = addDays(t, 6); }) }, '期間: 今週'),
+    el('button', { class: 'btn sm ghost', onclick: () => mutate(() => { n.due = t; }) }, '今日'),
+    el('button', { class: 'btn sm ghost', onclick: () => mutate(() => { n.due = addDays(t, 7); }) }, '1週間後'),
+    el('button', { class: 'btn sm ghost', onclick: () => mutate(() => { n.start = t; n.end = addDays(t, 6); }) }, '今日から1週間'),
   ));
   if (n.due) {
     const i = dueInfo(n.due, n.done);
@@ -1717,7 +1724,7 @@ function overviewInspector() {
   const open = ns.filter(n => !n.done && parentOf(n));
   frag.append(sec(null,
     el('div', { class: 'muted small' }, fmtMDW(t)),
-    el('div', { class: 'stat-big' }, `残り ${open.length} タスク`),
+    el('div', { class: 'stat-big' }, open.length, el('small', null, 'タスク残り')),
     el('div', { class: 'muted small' }, `完了 ${ns.filter(n => n.done).length} ・ 全 ${ns.length}`)));
 
   const due = ns.filter(n => n.due && !n.done && diffDays(t, n.due) <= 14).sort((a, b) => (a.due < b.due ? -1 : 1));
@@ -1739,7 +1746,8 @@ function overviewInspector() {
       ['Space+ドラッグ', 'キャンバス移動'], ['⌘+スクロール', 'ズーム'], ['⇧1', '全体を表示'], ['⇧A', '整列し直す'],
       ['ドラッグ→タスク上', '親を変更'],
     ];
-    frag.append(sec('ショートカット', el('div', { class: 'kbd-list' }, keys.map(([k, v]) => [el('span', { class: 'muted' }, v), el('kbd', null, k)]))));
+    frag.append(el('details', { class: 'sec' }, el('summary', null, 'ショートカット'),
+      el('div', { class: 'kbd-list' }, keys.map(([k, v]) => [el('span', { class: 'muted' }, v), el('kbd', null, k)]))));
   } else {
     frag.append(sec('操作', el('div', { class: 'muted small' },
       'バーをドラッグで移動、両端で期間を伸縮。◆ は締切です。日付のない行をドラッグすると期間を作成できます。')));
@@ -1798,11 +1806,6 @@ function blockInspector(b) {
   }
   frag.append(lsec);
 
-  if (!n) {
-    const sw = el('div', { class: 'swatches' });
-    for (const col of COLORS) sw.append(el('button', { class: 'sw' + ((b.color || DEFAULT_COLOR) === col ? ' on' : ''), style: { background: col }, onclick: () => mutate(() => { b.color = col; }) }));
-    frag.append(sec('カラー', sw));
-  }
   frag.append(sec('メモ', live(el('textarea', { class: 'inp', placeholder: 'この時間にやること', value: b.memo || '' }), v => { b.memo = v; })));
   frag.append(sec(null, el('div', { class: 'btns' },
     n ? el('button', { class: 'btn', onclick: () => revealNode(n.id) }, icon('mindmap'), 'マップで表示') : null,
@@ -1833,7 +1836,7 @@ function daySummary() {
 
   const s1 = sec(null,
     el('div', { class: 'muted small' }, fmtMDW(dayS.date)),
-    el('div', { class: 'stat-big' }, `${fmtH(used)} 計画済み`),
+    el('div', { class: 'stat-big' }, fmtH(used), el('small', null, '計画済み')),
     el('div', { class: 'muted small' }, `未計画 ${fmtH(1440 - used)}`));
   const stack = el('div', { class: 'stack' });
   for (const g of list) stack.append(el('i', { style: { width: g.min / 1440 * 100 + '%', background: g.color }, title: `${g.label} ${fmtH(g.min)}` }));
