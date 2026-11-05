@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan Canvas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo"></span><span>Plan Canvas</span></div>
+  <nav class="tabs" id="tabs">
+    <button data-page="map"><span class="ic-slot" data-icon="mindmap"></span>マインドマップ</button>
+    <button data-page="schedule"><span class="ic-slot" data-icon="gantt"></span>スケジュール</button>
+    <button data-page="day"><span class="ic-slot" data-icon="clock"></span>1日の計画</button>
+  </nav>
+  <div class="top-actions">
+    <button class="icon-btn" id="btnUndo" title="元に戻す (⌘Z)"><span class="ic-slot" data-icon="undo"></span></button>
+    <button class="icon-btn" id="btnRedo" title="やり直す (⇧⌘Z)"><span class="ic-slot" data-icon="redo"></span></button>
+    <button class="icon-btn" id="btnMenu" title="メニュー"><span class="ic-slot" data-icon="more"></span></button>
+    <div class="menu" id="menu" hidden>
+      <button data-act="export">データを書き出す（JSON）</button>
+      <button data-act="import">データを読み込む（JSON）</button>
+      <hr>
+      <button data-act="sample">サンプルデータに戻す</button>
+      <button data-act="clear" class="danger">すべて削除</button>
+    </div>
+    <input type="file" id="fileImport" accept="application/json,.json" hidden>
+  </div>
+</header>
+
+<main>
+  <section class="page" id="page-map">
+    <aside class="panel left" id="layers"></aside>
+    <div class="canvas" id="mm">
+      <div class="world">
+        <svg class="edges"></svg>
+        <div class="nodes"></div>
+      </div>
+      <div class="marquee"></div>
+      <div class="dock" id="dock"></div>
+      <div class="hint">ダブルクリック: 新規プロジェクト ・ Tab: 子タスク ・ Enter: 同じ階層 ・ F2: 名前変更 ・ Space+ドラッグ: 移動</div>
+    </div>
+  </section>
+
+  <section class="page" id="page-schedule">
+    <div class="sched" id="sched"></div>
+  </section>
+
+  <section class="page" id="page-day">
+    <aside class="panel left" id="palette">
+      <div class="panel-head">タスク</div>
+      <div class="pal-search"><input id="palSearch" type="search" placeholder="タスクを検索"></div>
+      <div class="pal-list" id="palList"></div>
+    </aside>
+    <div class="daymain" id="day"></div>
+  </section>
+
+  <aside class="panel right" id="inspector"></aside>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
