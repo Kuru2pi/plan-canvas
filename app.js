@@ -382,7 +382,7 @@ function toggleFold(id) {
 /* =========================================================
    Mind map
    ========================================================= */
-const mm = { el: null, world: null, svg: null, layer: null, marquee: null, nodeEls: {}, memoEls: {}, tool: 'select', space: false };
+const mm = { el: null, world: null, svg: null, layer: null, marquee: null, nodeEls: {}, memoEls: {}, size: {}, tool: 'select', space: false };
 let editingId = null;
 
 function visibleNodes() {
@@ -489,7 +489,9 @@ function zoomAt(f, cx, cy) {
 const zoomTo = z => zoomAt(z / data.view.z);
 function nodeBox(id) {
   const n = data.nodes[id], e = mm.nodeEls[id];
-  return { x: n.x, y: n.y, w: e ? e.offsetWidth : 160, h: e ? e.offsetHeight : 40 };
+  if (e && e.isConnected && e.offsetWidth) return { x: n.x, y: n.y, w: e.offsetWidth, h: e.offsetHeight };
+  const c = mm.size[id];
+  return { x: n.x, y: n.y, w: c ? c.w : 160, h: c ? c.h : 44 };
 }
 function fitView() {
   const boxes = Object.keys(mm.nodeEls).map(nodeBox).concat(Object.keys(mm.memoEls).map(memoBox));
@@ -588,6 +590,7 @@ function renderMap() {
       e.style.top = n.y + 'px';
     }
   }
+  for (const [id, e] of Object.entries(mm.nodeEls)) mm.size[id] = { w: e.offsetWidth, h: e.offsetHeight };
   drawEdges();
   applyView();
   renderLayers();
@@ -1016,6 +1019,7 @@ function mapKey(e) {
   if ((k === 'Delete' || k === 'Backspace') && e.shiftKey) { e.preventDefault(); deleteNodes(ids); return; }
   if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); removeKeepChildren(ids); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'm') { e.preventDefault(); createMemoAtCenter(); return; }
+  if (e.altKey && one && (k === 'ArrowUp' || k === 'ArrowDown')) { e.preventDefault(); nudgeOrder(one, k === 'ArrowUp' ? -1 : 1); return; }
   if (k.startsWith('Arrow')) { e.preventDefault(); navigate(k); return; }
   if (k === 'Escape') { selMemo = null; selectOnly(null); return; }
   if (mod && k.toLowerCase() === 'a') { e.preventDefault(); sel = new Set(Object.keys(mm.nodeEls)); updateSelection(); return; }
@@ -1026,6 +1030,127 @@ function mapKey(e) {
   if (mod && k === '-') { e.preventDefault(); zoomAt(1 / 1.2); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'v') { mm.tool = 'select'; mm.el.classList.remove('hand'); buildDock(); return; }
   if (!mod && !e.shiftKey && k.toLowerCase() === 'h') { mm.tool = 'hand'; mm.el.classList.add('hand'); buildDock(); }
+}
+
+/* ---------- reorder (layers / schedule / ⌥↑↓) ---------- */
+function visibleSubtree(id) {
+  const out = [data.nodes[id]];
+  const walk = p => { if (data.nodes[p].collapsed) return; for (const c of childrenOf(p)) { out.push(c); walk(c.id); } };
+  walk(id);
+  return out;
+}
+function subtreeBox(id) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const d of visibleSubtree(id)) {
+    const b = nodeBox(d.id);
+    x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h);
+  }
+  return { x1, y1, x2, y2 };
+}
+// lay a group of siblings out top-to-bottom in the given order, moving each with its subtree
+function restackSiblings(pid, order, newcomer) {
+  if (!order.length) return;
+  const boxes = Object.fromEntries(order.map(id => [id, subtreeBox(id)]));
+  const settled = order.filter(id => id !== newcomer);
+  const ref = settled.length ? settled : order;
+  let top = Math.min(...ref.map(id => boxes[id].y1));
+  let x = null;
+  if (pid) {
+    const p = nodeBox(pid);
+    x = settled.length ? Math.min(...settled.map(id => data.nodes[id].x)) : p.x + p.w + 56;
+    if (!settled.length) top = p.y;
+  }
+  const gap = pid ? 14 : 72;
+  for (const id of order) {
+    const b = boxes[id], n = data.nodes[id];
+    shiftSubtree(id, x == null ? 0 : x - n.x, top - b.y1);
+    top += b.y2 - b.y1 + gap;
+  }
+}
+// move a task before/after another task, or into it as its last child
+function moveNode(id, tid, zone) {
+  if (!data.nodes[id] || !data.nodes[tid] || id === tid || isAncestor(id, tid)) return false;
+  const n = data.nodes[id], t = data.nodes[tid];
+  const oldPid = parentOf(n);
+  let newPid, order;
+  if (zone === 'into') {
+    newPid = tid;
+    order = childrenOf(tid).filter(c => c.id !== id).map(c => c.id).concat(id);
+  } else {
+    newPid = parentOf(t);
+    order = childrenOf(newPid).filter(c => c.id !== id).map(c => c.id);
+    const i = order.indexOf(tid);
+    order.splice(zone === 'before' ? i : i + 1, 0, id);
+  }
+  const same = oldPid === newPid && childrenOf(newPid).map(c => c.id).join() === order.join();
+  if (same) return false;
+  mutate(() => {
+    if (zone === 'into') t.collapsed = false;
+    if (!newPid && oldPid) n.color = n.color || colorOf(n);
+    n.parentId = newPid;
+    restackSiblings(newPid, order, oldPid === newPid ? null : id);
+    if (oldPid && oldPid !== newPid) restackSiblings(oldPid, childrenOf(oldPid).map(c => c.id));
+  });
+  return true;
+}
+function nudgeOrder(id, dir) {
+  const n = data.nodes[id];
+  const sibs = childrenOf(parentOf(n));
+  const i = sibs.findIndex(s => s.id === id);
+  const j = sibs[i + dir];
+  if (j) moveNode(id, j.id, dir < 0 ? 'before' : 'after');
+}
+
+// drag rows of a list (layers, gantt labels) to reorder / nest
+let rowDragJustEnded = false;
+function startRowDrag(e, id, list, rowSel) {
+  if (e.button !== 0) return;
+  const title = data.nodes[id].title;
+  let ghost = null, line = null, over = null, zone = null;
+  const clear = () => { if (over) over.classList.remove('row-into'); };
+  trackPointer(e, (ev, dx, dy) => {
+    if (!ghost) {
+      if (Math.abs(dy) < 5) return;
+      ghost = el('div', { class: 'row-ghost' }, title);
+      line = el('div', { class: 'row-line' });
+      document.body.append(ghost, line);
+      document.body.classList.add('row-dragging');
+    }
+    ghost.style.left = ev.clientX + 12 + 'px';
+    ghost.style.top = ev.clientY + 8 + 'px';
+    const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+    const row = hit && hit.closest(rowSel);
+    clear();
+    over = null; zone = null; line.style.display = 'none';
+    if (!row || !list.contains(row)) return;
+    const tid = row.dataset.id;
+    if (tid === id || isAncestor(id, tid)) return;
+    const r = row.getBoundingClientRect();
+    const f = (ev.clientY - r.top) / r.height;
+    zone = f < 0.3 ? 'before' : f > 0.7 ? 'after' : 'into';
+    over = row;
+    if (zone === 'into') row.classList.add('row-into');
+    else {
+      const lab = row.querySelector('.lt, .gl-t');
+      const left = lab ? lab.getBoundingClientRect().left - 4 : r.left;
+      Object.assign(line.style, { display: 'block', left: left + 'px', width: r.right - left + 'px', top: (zone === 'before' ? r.top : r.bottom) - 1 + 'px' });
+    }
+  }, () => {
+    clear();
+    if (!ghost) return;
+    ghost.remove(); line.remove();
+    document.body.classList.remove('row-dragging');
+    rowDragJustEnded = true;
+    setTimeout(() => { rowDragJustEnded = false; }, 0);
+    if (over && zone) {
+      const t = data.nodes[over.dataset.id];
+      if (moveNode(id, t.id, zone)) {
+        sel = new Set([id]);
+        renderAll();
+        toast(zone === 'into' ? `「${t.title}」の中に移動しました` : '順番を入れ替えました');
+      }
+    }
+  });
 }
 
 /* ---------- sticky memos ---------- */
@@ -1127,7 +1252,9 @@ function renderLayers() {
         class: `layer-row${isRoot ? ' root' : ''}${sel.has(c.id) ? ' selected' : ''}${c.done ? ' done' : ''}`,
         'data-id': c.id,
         style: { paddingLeft: 6 + depth * 14 + 'px' },
+        onpointerdown: ev => { if (!ev.target.closest('.arrow')) startRowDrag(ev, c.id, list, '.layer-row'); },
         onclick: ev => {
+          if (rowDragJustEnded) return;
           if (ev.shiftKey) { sel.has(c.id) ? sel.delete(c.id) : sel.add(c.id); updateSelection(); }
           else { selectOnly(c.id); ensureVisible(c.id); }
         },
@@ -1338,7 +1465,7 @@ function onGanttDown(e) {
   if (fold) { sch.fold.has(id) ? sch.fold.delete(id) : sch.fold.add(id); renderSchedule(); return; }
   if (e.target.closest('[data-done]')) { toggleDone(id); return; }
   selectOnly(id);
-  if (e.target.closest('.g-label')) return;
+  if (e.target.closest('.g-label')) { startRowDrag(e, id, $('#sched .g-body'), '.g-row'); return; }
 
   const { dayW } = sch.ctx;
   const modeEl = e.target.closest('[data-mode]');
@@ -2083,7 +2210,7 @@ function overviewInspector() {
       ['Space+ドラッグ', 'キャンバス移動'], ['⌘+スクロール', 'ズーム'], ['⇧1', '全体を表示'], ['⇧A', '整列し直す'],
       ['M', 'メモを置く'], ['ドラッグ', '自由に配置'], ['ドラッグ→タスク上', '親を変更'],
       ['ドラッグ→線の上', '間にはめる'], ['線にカーソル→＋', '間に新しいタスク'], ['⇧Tab', '親との間に挿入'],
-      ['⌥+ドラッグ', '子を残して抜き出す'], ['Delete', '削除（後ろはつなぎ直す）'], ['⇧Delete', '後ろもまとめて削除'],
+      ['⌥↑ / ⌥↓', '順番を入れ替え'], ['⌥+ドラッグ', '子を残して抜き出す'], ['Delete', '削除（後ろはつなぎ直す）'], ['⇧Delete', '後ろもまとめて削除'],
     ];
     frag.append(el('details', { class: 'sec' }, el('summary', null, 'ショートカット'),
       el('div', { class: 'kbd-list' }, keys.map(([k, v]) => [el('span', { class: 'muted' }, v), el('kbd', null, k)]))));

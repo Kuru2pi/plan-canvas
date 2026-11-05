@@ -528,3 +528,15 @@ kbd {
 }
 .edge-add .ic { width: 12px; height: 12px; }
 .edge-add:hover { transform: scale(1.12); }
+
+/* ---------- reorder rows ---------- */
+.row-ghost {
+  position: fixed; z-index: 200; pointer-events: none; padding: 4px 10px; border-radius: 6px;
+  background: var(--ink); color: #fff; font-size: 12px; box-shadow: var(--shadow-lg); white-space: nowrap;
+}
+.row-line { position: fixed; z-index: 199; height: 2px; border-radius: 2px; background: var(--accent); pointer-events: none; display: none; }
+.row-line::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--accent); background: #fff; box-sizing: border-box; }
+.row-into { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 6px; }
+.g-row.row-into .g-label { box-shadow: inset 0 0 0 2px var(--accent); }
+body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-select: none; }
+.layer-row, .g-label { user-select: none; -webkit-user-select: none; }
