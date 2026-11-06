@@ -367,20 +367,13 @@ function revealNode(id) {
 }
 
 /* ---------- node operations (shared) ---------- */
-// a parent is done exactly when all of its children are, all the way up the branch
-function syncParents(id) {
-  let pid = parentOf(data.nodes[id]);
-  while (pid) {
-    data.nodes[pid].done = childrenOf(pid).every(c => c.done);
-    pid = parentOf(data.nodes[pid]);
-  }
-}
-// 0-100. A task with children is the average of its children
+// tasks run in order, parent first and child after, so each task keeps its own done state and %.
+// Only a project (root) adds up: it shows the average of everything under it
+const ownPct = n => (n.done ? 100 : n.progress || 0);
 function taskPct(n) {
-  if (n.done) return 100;
-  const kids = childrenOf(n.id);
-  if (kids.length) return Math.round(kids.reduce((sum, c) => sum + taskPct(c), 0) / kids.length);
-  return n.progress || 0;
+  const ds = parentOf(n) ? [] : descendants(n.id);
+  if (n.done || !ds.length) return ownPct(n);
+  return Math.round(ds.reduce((sum, d) => sum + ownPct(d), 0) / ds.length);
 }
 function setProgress(id, v) {
   const n = data.nodes[id];
@@ -388,11 +381,10 @@ function setProgress(id, v) {
   mutate(() => {
     n.progress = pct > 0 && pct < 100 ? pct : null;
     n.done = pct >= 100;
-    syncParents(id);
   });
 }
 function setDone(ids, to) {
-  mutate(() => ids.forEach(id => { data.nodes[id].done = to; syncParents(id); }));
+  mutate(() => ids.forEach(id => { data.nodes[id].done = to; }));
 }
 function toggleDone(ids) {
   ids = [].concat(ids).filter(id => data.nodes[id]);
@@ -588,7 +580,7 @@ function metaChips(n) {
   }
   const ds = descendants(n.id);
   if (ds.length) parts.push(el('span', null, `${ds.filter(k => k.done).length}/${ds.length}`));
-  else if (!n.done && n.progress) parts.push(el('span', null, `${n.progress}%`));
+  if (!n.done && n.progress && parentOf(n)) parts.push(el('span', null, `${n.progress}%`));
   if (n.note && n.note.trim()) parts.push(el('span', { class: 'has-note', title: n.note.slice(0, 120) }, icon('note')));
   return parts.length ? el('div', { class: 'meta' }, parts) : null;
 }
@@ -1572,8 +1564,8 @@ function ganttRow({ n, depth, hasKids }, W) {
       title: `${n.title}  ${fmtMDW(s)} – ${fmtMDW(e)}（${taskPct(n)}%）`,
     }, el('div', { class: 'h l', 'data-mode': 'l' }), el('span', { class: 'lbl' }, n.title), el('div', { class: 'h r', 'data-mode': 'r' })));
   } else {
-    // summary span of children
-    const ds = descendants(n.id);
+    // a project with no dates of its own: thin line across everything in it
+    const ds = isRoot ? descendants(n.id) : [];
     const dates = ds.flatMap(d => [d.start, d.end, d.due]).filter(Boolean);
     if (dates.length) {
       const s = dates.reduce(minISO), e = dates.reduce(maxISO);
@@ -1731,9 +1723,7 @@ function placePopover(x, y) {
 function calItems() {
   const items = [];
   for (const n of allNodes()) {
-    // a parent's period just summarises its children, so only show the most detailed level
-    const summarised = descendants(n.id).some(d => d.start || d.end);
-    if ((n.start || n.end) && !summarised) items.push({ n, s: n.start || n.end, e: n.end || n.start, kind: 'period' });
+    if (n.start || n.end) items.push({ n, s: n.start || n.end, e: n.end || n.start, kind: 'period' });
     if (n.due) items.push({ n, s: n.due, e: n.due, kind: 'due' });
   }
   return items;
@@ -1951,8 +1941,8 @@ function blockCheck(b) {
 function pctEditor(n, after) {
   const pct = taskPct(n);
   const box = el('div', { class: 'pct-editor' }, el('div', { class: 'prog-big', style: { '--c': colorOf(n) } }, el('b', { style: { width: pct + '%' } })));
-  if (childrenOf(n.id).length) {
-    box.append(el('div', { class: 'muted small' }, `${pct}%（子タスクから自動で計算）`));
+  if (!parentOf(n) && childrenOf(n.id).length) {
+    box.append(el('div', { class: 'muted small' }, `${pct}%（プロジェクト全体の平均）`));
     return box;
   }
   const set = v => { setProgress(n.id, v); if (after) after(); };
