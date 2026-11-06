@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261106122649">
+<link rel="stylesheet" href="style.css?v=20261106123840">
 </head>
 <body>
 <header class="topbar">
@@ -22,9 +22,10 @@
   <div class="top-actions">
     <button class="icon-btn m-only" id="btnPanel" title="一覧"><span class="ic-slot" data-icon="list"></span></button>
     <button class="icon-btn m-only" id="btnInfo" title="詳細"><span class="ic-slot" data-icon="info"></span></button>
+    <button class="ai-btn" id="btnAI" title="AIにおまかせ"><span class="ai-lbl">AI</span></button>
     <button class="sync-btn" id="btnSync" hidden></button>
     <button class="icon-btn" id="btnUndo" title="元に戻す (⌘Z)"><span class="ic-slot" data-icon="undo"></span></button>
-    <button class="icon-btn" id="btnRedo" title="やり直す (⇧⌘Z)"><span class="ic-slot" data-icon="redo"></span></button>
+    <button class="icon-btn d-only" id="btnRedo" title="やり直す (⇧⌘Z)"><span class="ic-slot" data-icon="redo"></span></button>
     <button class="icon-btn" id="btnMenu" title="メニュー"><span class="ic-slot" data-icon="more"></span></button>
     <div class="menu" id="menu" hidden>
       <button data-act="export">データを書き出す（JSON）</button>
@@ -69,8 +70,9 @@
 
 <div class="scrim" id="scrim"></div>
 <div class="toast" id="toast"></div>
-<script src="firebase-config.js?v=20261106122649"></script>
-<script src="app.js?v=20261106122649"></script>
-<script src="sync.js?v=20261106122649"></script>
+<script src="firebase-config.js?v=20261106123840"></script>
+<script src="app.js?v=20261106123840"></script>
+<script src="sync.js?v=20261106123840"></script>
+<script src="ai.js?v=20261106123840"></script>
 </body>
 </html>
