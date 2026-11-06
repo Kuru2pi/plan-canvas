@@ -367,11 +367,21 @@ function revealNode(id) {
 }
 
 /* ---------- node operations (shared) ---------- */
+// a parent is done exactly when all of its children are, all the way up the branch
+function syncParents(id) {
+  let pid = parentOf(data.nodes[id]);
+  while (pid) {
+    data.nodes[pid].done = childrenOf(pid).every(c => c.done);
+    pid = parentOf(data.nodes[pid]);
+  }
+}
+function setDone(ids, to) {
+  mutate(() => ids.forEach(id => { data.nodes[id].done = to; syncParents(id); }));
+}
 function toggleDone(ids) {
   ids = [].concat(ids).filter(id => data.nodes[id]);
   if (!ids.length) return;
-  const to = !data.nodes[ids[0]].done;
-  mutate(() => ids.forEach(id => { data.nodes[id].done = to; }));
+  setDone(ids, !data.nodes[ids[0]].done);
 }
 function deleteNodes(ids) {
   ids = ids.filter(id => data.nodes[id]);
@@ -2456,8 +2466,8 @@ function multiInspector(ids) {
   const frag = document.createDocumentFragment();
   frag.append(sec(`${ids.length}件を選択中`,
     el('div', { class: 'btns' },
-      el('button', { class: 'btn', onclick: () => mutate(() => ids.forEach(id => { data.nodes[id].done = true; })) }, icon('check'), 'すべて完了'),
-      el('button', { class: 'btn', onclick: () => mutate(() => ids.forEach(id => { data.nodes[id].done = false; })) }, '未完了に戻す'),
+      el('button', { class: 'btn', onclick: () => setDone(ids, true) }, icon('check'), 'すべて完了'),
+      el('button', { class: 'btn', onclick: () => setDone(ids, false) }, '未完了に戻す'),
       el('button', { class: 'btn danger', onclick: () => removeKeepChildren(ids) }, icon('trash'), '削除'),
       el('button', { class: 'btn danger', onclick: () => deleteNodes(ids) }, '後ろもまとめて削除'))));
   const dsec = sec('締切をまとめて設定');
