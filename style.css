@@ -750,3 +750,27 @@ body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-selec
   .sync-btn { padding: 0 9px; height: 32px; margin-right: 0; }
   .sync-btn:not(.signedout) .sync-txt { display: none; }
 }
+
+/* ---------- ticking off blocks ---------- */
+.blk { padding-left: 30px; }
+.blk.done { opacity: .62; }
+.blk.done .bm { text-decoration: line-through; }
+.blk-chk { cursor: pointer; }
+.blk .blk-chk { position: absolute; left: 10px; top: 5px; margin: 0; z-index: 2; background: #fff; }
+.blk .blk-chk.on { background: var(--c); }
+.blk .blk-chk::after, .ag-item .blk-chk::after { content: ""; position: absolute; inset: -7px; }
+.blk.small .blk-chk { top: 2px; width: 13px; height: 13px; }
+.wv-col .blk { padding-left: 23px; }
+.wv-col .blk .blk-chk { left: 6px; top: 3px; width: 13px; height: 13px; }
+.ag-item .blk-chk { position: relative; margin-top: 2px; width: 18px; height: 18px; background: #fff; }
+.ag-item .blk-chk.on { background: var(--c); }
+@media (max-width: 760px) {
+  .blk { padding-left: 34px; }
+  .blk .blk-chk { width: 19px; height: 19px; top: 6px; }
+  .blk.small .blk-chk { top: 2px; width: 15px; height: 15px; }
+  .wv-col .blk { padding-left: 23px; }
+  .wv-col .blk .blk-chk { width: 13px; height: 13px; top: 3px; }
+}
+@media (max-width: 760px) {
+  .day-head .btn.sm:not(.danger) { font-size: 11px; }
+}

@@ -1767,14 +1767,14 @@ function buildWeek() {
       const { col, n: cnt } = lay.get(b.id);
       const node = linkedNode(b), dur = b.end - b.start;
       colEl.append(el('div', {
-        class: `blk${node ? '' : ' routine'}${dur < 45 ? ' small' : ''}${node && node.done ? ' done' : ''}`,
+        class: `blk${node ? '' : ' routine'}${dur < 45 ? ' small' : ''}${isBlockDone(b) ? ' done' : ''}`,
         style: { '--c': blockColor(b), top: b.start / 60 * H + 'px', height: Math.max(dur / 60 * H - 2, 9) + 'px', left: `calc(${col / cnt * 100}% + 1px)`, width: `calc(${100 / cnt}% - 3px)` },
         title: `${blockTitle(b)}  ${fmtHM(b.start)}–${fmtHM(b.end)}`,
         onclick: e => {
           if (node) { setDayDate(d); selBlock = b.id; setPage('day'); }
           else openEventPopover(e.clientX, e.clientY, { id: b.id });
         },
-      }, el('div', { class: 'bt' }, blockTitle(b)), dur >= 60 ? el('div', { class: 'bm' }, `${fmtHM(b.start)}–${fmtHM(b.end)}`) : null));
+      }, blockCheck(b), el('div', { class: 'bt' }, blockTitle(b)), dur >= 60 ? el('div', { class: 'bm' }, `${fmtHM(b.start)}–${fmtHM(b.end)}`) : null));
     }
     if (d === today) colEl.append(el('div', { class: 'now', style: { top: nowMin() / 60 * H + 'px', left: 0 } }));
     grid.append(colEl);
@@ -1866,8 +1866,8 @@ function dayAgenda(d, items) {
     box.append(el('button', {
       class: 'ag-item', style: { '--c': blockColor(b) },
       onclick: e => { if (node) { setDayDate(d); selBlock = b.id; setPage('day'); } else openEventPopover(e.clientX, e.clientY, { id: b.id }); },
-    }, el('span', { class: 'ag-time' }, fmtHM(b.start), el('br'), el('span', { class: 'faint' }, fmtHM(b.end))),
-      el('span', { class: 'ag-body' }, el('span', { class: 'ag-t' }, blockTitle(b)), node && parentOf(node) ? el('span', { class: 'ag-s' }, rootOf(node).title) : null)));
+    }, blockCheck(b), el('span', { class: 'ag-time' }, fmtHM(b.start), el('br'), el('span', { class: 'faint' }, fmtHM(b.end))),
+      el('span', { class: 'ag-body' }, el('span', { class: 'ag-t' + (isBlockDone(b) ? ' done' : '') }, blockTitle(b)), node && parentOf(node) ? el('span', { class: 'ag-s' }, rootOf(node).title) : null)));
   }
   for (const it of tasks) {
     const n = it.n;
@@ -1889,6 +1889,26 @@ const blocksOn = date => Object.values(data.blocks).filter(b => b.date === date)
 const linkedNode = b => (b.nodeId && data.nodes[b.nodeId]) || null;
 const blockColor = b => { const n = linkedNode(b); return n ? colorOf(n) : (b.color || ROUTINE_COLOR); };
 const blockTitle = b => { const n = linkedNode(b); return n ? n.title : (b.title || '無題の予定'); };
+
+// a block is one sitting of work: ticking it doesn't finish the whole task, which may span several days
+const isBlockDone = b => { const n = linkedNode(b); return !!(b.done || (n && n.done)); };
+function toggleBlockDone(id) {
+  const b = data.blocks[id];
+  if (!b) return;
+  mutate(() => {
+    const n = linkedNode(b);
+    if (isBlockDone(b)) { b.done = false; if (n) n.done = false; } else b.done = true;
+  });
+}
+function blockCheck(b) {
+  const on = isBlockDone(b);
+  const stop = e => e.stopPropagation();
+  return el('span', {
+    class: 'chk blk-chk' + (on ? ' on' : ''), role: 'checkbox', 'aria-checked': String(on), title: on ? '未完了に戻す' : '完了にする',
+    style: { '--c': blockColor(b) }, onpointerdown: stop, ondblclick: stop,
+    onclick: e => { e.stopPropagation(); toggleBlockDone(b.id); },
+  }, icon('check'));
+}
 
 function renderDay() { renderPalette(); renderDayMain(); }
 
@@ -2019,7 +2039,7 @@ function renderBlocks() {
     const node = linkedNode(b);
     const proj = node && parentOf(node) ? rootOf(node).title : null;
     lane.append(el('div', {
-      class: `blk${node ? '' : ' routine'}${selBlock === b.id ? ' sel' : ''}${small ? ' small' : ''}${node && node.done ? ' done' : ''}`,
+      class: `blk${node ? '' : ' routine'}${selBlock === b.id ? ' sel' : ''}${small ? ' small' : ''}${isBlockDone(b) ? ' done' : ''}`,
       'data-id': b.id,
       style: {
         '--c': blockColor(b), top: b.start / 60 * H + 'px', height: Math.max(dur / 60 * H - 2, 10) + 'px',
@@ -2028,6 +2048,7 @@ function renderBlocks() {
       title: `${blockTitle(b)}  ${fmtHM(b.start)}–${fmtHM(b.end)}`,
     },
       el('div', { class: 'rz-t' }),
+      blockCheck(b),
       el('div', { class: 'bt' }, blockTitle(b), small ? el('span', { class: 'bm' }, `  ${fmtHM(b.start)}–${fmtHM(b.end)}`) : null),
       small ? null : el('div', { class: 'bm' }, `${fmtHM(b.start)}–${fmtHM(b.end)}・${fmtH(dur)}${proj ? '・' + proj : ''}`),
       el('div', { class: 'rz-b' }),
@@ -2125,7 +2146,7 @@ function copyPrevDay() {
   const prev = blocksOn(addDays(dayS.date, -1));
   if (!prev.length) { toast('前日に予定がありません'); return; }
   mutate(() => {
-    for (const b of prev) { const id = uid(); data.blocks[id] = { ...b, id, date: dayS.date }; }
+    for (const b of prev) { const id = uid(); data.blocks[id] = { ...b, id, date: dayS.date, done: false }; }
   });
   toast(`${prev.length}件の予定をコピーしました`);
 }
@@ -2157,7 +2178,7 @@ function duplicateBlock(b) {
   const s = clamp(b.end, 0, 1440 - dur);
   const id = uid();
   selBlock = id;
-  mutate(() => { data.blocks[id] = { ...b, id, start: s, end: s + dur }; });
+  mutate(() => { data.blocks[id] = { ...b, id, start: s, end: s + dur, done: false }; });
 }
 
 /* ---------- palette ---------- */
@@ -2514,10 +2535,12 @@ function blockInspector(b) {
     head.append(el('div', { style: { fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' } },
       el('span', { style: { width: '10px', height: '10px', borderRadius: '3px', background: colorOf(n), flex: 'none' } }), n.title));
     head.append(el('label', { class: 'check-row', style: { marginTop: '8px' } },
-      el('input', { type: 'checkbox', checked: !!n.done, onchange: () => toggleDone(n.id) }), 'タスクを完了にする'));
+      el('input', { type: 'checkbox', checked: !!n.done, onchange: () => toggleDone(n.id) }), 'タスク全体を完了にする'));
   } else {
     head.append(live(el('input', { class: 'inp title-inp', type: 'text', value: b.title, placeholder: '予定の名前（例: 授業、移動）' }), v => { b.title = v; }));
   }
+  head.append(el('label', { class: 'check-row', style: { marginTop: n ? '2px' : '8px' } },
+    el('input', { type: 'checkbox', checked: isBlockDone(b), onchange: () => toggleBlockDone(b.id) }), 'この予定を完了にする'));
   frag.append(head);
 
   const tsec = sec('時間');
@@ -2577,6 +2600,7 @@ function daySummary() {
   const used = covered.reduce((a, v) => a + v, 0);
   const list = [...groups.values()].sort((a, b) => b.min - a.min);
 
+  const doneCount = bl.filter(isBlockDone).length;
   const s1 = sec(null,
     el('div', { class: 'muted small' }, fmtMDW(dayS.date)),
     el('div', { class: 'stat-big' }, fmtH(used), el('small', null, '計画済み')),
@@ -2587,6 +2611,10 @@ function daySummary() {
   for (const g of list) s1.append(el('div', { class: 'legend-row' }, el('span', { class: 'dot', style: { background: g.color } }), el('span', { class: 'lt' }, g.label), el('span', { class: 'lh' }, fmtH(g.min))));
   s1.append(el('div', { class: 'legend-row' }, el('span', { class: 'dot', style: { background: '#e6e6e6' } }), el('span', { class: 'lt muted' }, '未計画'), el('span', { class: 'lh' }, fmtH(1440 - used))));
   frag.append(s1);
+  if (bl.length) {
+    frag.append(sec(null, el('h4', null, 'この日のチェック', el('span', { class: 'sub' }, `${doneCount}/${bl.length} 完了`)),
+      el('div', { class: 'prog-big' }, el('b', { style: { width: doneCount / bl.length * 100 + '%' } }))));
+  }
 
   const ts = sec('この日に取り組むタスク');
   if (tasks.size) {
