@@ -1890,15 +1890,14 @@ const linkedNode = b => (b.nodeId && data.nodes[b.nodeId]) || null;
 const blockColor = b => { const n = linkedNode(b); return n ? colorOf(n) : (b.color || ROUTINE_COLOR); };
 const blockTitle = b => { const n = linkedNode(b); return n ? n.title : (b.title || '無題の予定'); };
 
-// a block is one sitting of work: ticking it doesn't finish the whole task, which may span several days
-const isBlockDone = b => { const n = linkedNode(b); return !!(b.done || (n && n.done)); };
+// a block linked to a task shares the task's done state, so a tick shows up everywhere
+const isBlockDone = b => { const n = linkedNode(b); return n ? !!n.done : !!b.done; };
 function toggleBlockDone(id) {
   const b = data.blocks[id];
   if (!b) return;
-  mutate(() => {
-    const n = linkedNode(b);
-    if (isBlockDone(b)) { b.done = false; if (n) n.done = false; } else b.done = true;
-  });
+  const n = linkedNode(b);
+  if (n) toggleDone(n.id);
+  else mutate(() => { b.done = !b.done; });
 }
 function blockCheck(b) {
   const on = isBlockDone(b);
@@ -2534,13 +2533,11 @@ function blockInspector(b) {
     head.append(el('div', { class: 'crumb' }, ancestors(n).map(a => a.title).join(' / ')));
     head.append(el('div', { style: { fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' } },
       el('span', { style: { width: '10px', height: '10px', borderRadius: '3px', background: colorOf(n), flex: 'none' } }), n.title));
-    head.append(el('label', { class: 'check-row', style: { marginTop: '8px' } },
-      el('input', { type: 'checkbox', checked: !!n.done, onchange: () => toggleDone(n.id) }), 'タスク全体を完了にする'));
   } else {
     head.append(live(el('input', { class: 'inp title-inp', type: 'text', value: b.title, placeholder: '予定の名前（例: 授業、移動）' }), v => { b.title = v; }));
   }
-  head.append(el('label', { class: 'check-row', style: { marginTop: n ? '2px' : '8px' } },
-    el('input', { type: 'checkbox', checked: isBlockDone(b), onchange: () => toggleBlockDone(b.id) }), 'この予定を完了にする'));
+  head.append(el('label', { class: 'check-row', style: { marginTop: '8px' } },
+    el('input', { type: 'checkbox', checked: isBlockDone(b), onchange: () => toggleBlockDone(b.id) }), n ? 'タスクを完了にする' : 'この予定を完了にする'));
   frag.append(head);
 
   const tsec = sec('時間');
