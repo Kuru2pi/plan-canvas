@@ -375,6 +375,22 @@ function syncParents(id) {
     pid = parentOf(data.nodes[pid]);
   }
 }
+// 0-100. A task with children is the average of its children
+function taskPct(n) {
+  if (n.done) return 100;
+  const kids = childrenOf(n.id);
+  if (kids.length) return Math.round(kids.reduce((sum, c) => sum + taskPct(c), 0) / kids.length);
+  return n.progress || 0;
+}
+function setProgress(id, v) {
+  const n = data.nodes[id];
+  const pct = clamp(Math.round(v) || 0, 0, 100);
+  mutate(() => {
+    n.progress = pct > 0 && pct < 100 ? pct : null;
+    n.done = pct >= 100;
+    syncParents(id);
+  });
+}
 function setDone(ids, to) {
   mutate(() => ids.forEach(id => { data.nodes[id].done = to; syncParents(id); }));
 }
@@ -572,6 +588,7 @@ function metaChips(n) {
   }
   const ds = descendants(n.id);
   if (ds.length) parts.push(el('span', null, `${ds.filter(k => k.done).length}/${ds.length}`));
+  else if (!n.done && n.progress) parts.push(el('span', null, `${n.progress}%`));
   if (n.note && n.note.trim()) parts.push(el('span', { class: 'has-note', title: n.note.slice(0, 120) }, icon('note')));
   return parts.length ? el('div', { class: 'meta' }, parts) : null;
 }
@@ -1543,8 +1560,8 @@ function ganttRow({ n, depth, hasKids }, W) {
     track.append(el('div', {
       class: `g-bar${n.done ? ' done' : ''}${w < 90 ? ' narrow' : ''}${sel.has(n.id) ? ' sel' : ''}`,
       'data-id': n.id, 'data-mode': 'move',
-      style: { left: diffDays(start, s) * dayW + 'px', width: w + 'px', '--c': c },
-      title: `${n.title}  ${fmtMDW(s)} – ${fmtMDW(e)}`,
+      style: { left: diffDays(start, s) * dayW + 'px', width: w + 'px', '--c': c, '--p': taskPct(n) + '%' },
+      title: `${n.title}  ${fmtMDW(s)} – ${fmtMDW(e)}（${taskPct(n)}%）`,
     }, el('div', { class: 'h l', 'data-mode': 'l' }), el('span', { class: 'lbl' }, n.title), el('div', { class: 'h r', 'data-mode': 'r' })));
   } else {
     // summary span of children
@@ -1692,12 +1709,15 @@ function openEventPopover(x, y, opts) {
       el('button', { class: 'btn subtle', onclick: closePopover }, 'キャンセル'),
       el('button', { class: 'btn primary', onclick: submit }, b ? '保存' : '追加')),
   );
+  placePopover(x, y);
+  title.focus();
+}
+function placePopover(x, y) {
   document.body.append(pop);
   const r = pop.getBoundingClientRect();
   pop.style.left = clamp(x - r.width / 2, 8, innerWidth - r.width - 8) + 'px';
   pop.style.top = (y + r.height + 12 > innerHeight ? Math.max(8, y - r.height - 12) : y + 12) + 'px';
   setTimeout(() => document.addEventListener('pointerdown', popOutside, true));
-  title.focus();
 }
 
 function calItems() {
@@ -1919,6 +1939,37 @@ function blockCheck(b) {
   }, icon('check'));
 }
 
+function pctEditor(n, after) {
+  const pct = taskPct(n);
+  const box = el('div', { class: 'pct-editor' }, el('div', { class: 'prog-big', style: { '--c': colorOf(n) } }, el('b', { style: { width: pct + '%' } })));
+  if (childrenOf(n.id).length) {
+    box.append(el('div', { class: 'muted small' }, `${pct}%（子タスクから自動で計算）`));
+    return box;
+  }
+  const set = v => { setProgress(n.id, v); if (after) after(); };
+  const inp = el('input', { class: 'inp', type: 'number', min: '0', max: '100', step: '5', value: String(pct), onchange: e => set(Number(e.target.value)) });
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') inp.blur(); });
+  box.append(el('div', { class: 'pct-row' },
+    [0, 25, 50, 75, 100].map(v => el('button', { class: 'btn sm' + (pct === v ? ' primary' : ''), onclick: () => set(v) }, `${v}`)),
+    el('span', { class: 'pct-inp' }, inp, '%')));
+  return box;
+}
+function pctButton(n) {
+  const pct = taskPct(n);
+  const stop = e => e.stopPropagation();
+  return el('button', {
+    class: 'blk-pct' + (pct ? ' has' : ''), title: '進み具合を入力', onpointerdown: stop, ondblclick: stop,
+    onclick: e => { e.stopPropagation(); openPctPopover(e.clientX, e.clientY, n); },
+  }, pct ? `${pct}%` : '%');
+}
+function openPctPopover(x, y, n) {
+  closePopover();
+  pop = el('div', { class: 'popover pct-pop' },
+    el('div', { class: 'pop-head' }, `「${n.title}」の進み具合`, el('button', { class: 'x-btn', onclick: closePopover }, icon('x'))),
+    pctEditor(n, closePopover));
+  placePopover(x, y);
+}
+
 function renderDay() { renderPalette(); renderDayMain(); }
 
 function setDayDate(d) { dayS.date = d; selBlock = null; renderAll(); }
@@ -2058,6 +2109,7 @@ function renderBlocks() {
     },
       el('div', { class: 'rz-t' }),
       blockCheck(b),
+      node && !node.done ? pctButton(node) : null,
       el('div', { class: 'bt' }, blockTitle(b), small ? el('span', { class: 'bm' }, `  ${fmtHM(b.start)}–${fmtHM(b.end)}`) : null),
       small ? null : el('div', { class: 'bm' }, `${fmtHM(b.start)}–${fmtHM(b.end)}・${fmtH(dur)}${proj ? '・' + proj : ''}`),
       el('div', { class: 'rz-b' }),
@@ -2391,6 +2443,8 @@ function nodeInspector(n) {
   }
   frag.append(dsec);
 
+  frag.append(sec('進み具合', pctEditor(n)));
+
   // time
   const ids = [n.id, ...descendants(n.id).map(d => d.id)];
   const own = scheduledMin([n.id]), total = scheduledMin(ids);
@@ -2549,6 +2603,7 @@ function blockInspector(b) {
   head.append(el('label', { class: 'check-row', style: { marginTop: '8px' } },
     el('input', { type: 'checkbox', checked: isBlockDone(b), onchange: () => toggleBlockDone(b.id) }), n ? 'タスクを完了にする' : 'この予定を完了にする'));
   frag.append(head);
+  if (n) frag.append(sec('進み具合', pctEditor(n)));
 
   const tsec = sec('時間');
   tsec.append(

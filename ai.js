@@ -72,6 +72,7 @@ function aiContext(extra) {
     if (parentOf(n)) o.parent = n.parentId;
     for (const k of ['start', 'end', 'due', 'estimate']) if (n[k]) o[k] = n[k];
     if (n.done) o.done = true;
+    else if (taskPct(n)) o.progress_percent = taskPct(n);
     const m = scheduledMin([n.id]);
     if (m) o.scheduled_hours = m / 60;
     return o;
