@@ -1460,6 +1460,14 @@ function renderSchedule() {
   }
 }
 const days7 = ws => [...Array(7)].map((_, i) => addDays(ws, i));
+function scheduleKey(e) {
+  const ids = [...sel].filter(id => data.nodes[id]);
+  if (e.key === 'Escape') selectOnly(null);
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    if (e.shiftKey) deleteNodes(ids); else removeKeepChildren(ids);
+  }
+}
 function shiftMonth(m, k) { const d = parseISO(m); d.setMonth(d.getMonth() + k, 1); return toISO(d); }
 
 function ganttRows() {
@@ -2402,7 +2410,7 @@ function live(input, apply) {
     renderPage();
   });
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && input.tagName === 'INPUT' && !e.isComposing) input.blur();
+    if (e.key === 'Escape' || (e.key === 'Enter' && input.tagName === 'INPUT' && !e.isComposing)) input.blur();
     e.stopPropagation();
   });
   return input;
@@ -2809,20 +2817,31 @@ function initTop() {
   $('#palSearch').addEventListener('input', e => { dayS.query = e.target.value; renderPalette(); });
   $('#palSearch').addEventListener('keydown', e => e.stopPropagation());
 
+  // fields that take typed text; a focused checkbox must not swallow shortcuts
+  const isField = t => t.closest && t.closest('textarea, select, [contenteditable="true"], input:not([type=checkbox]):not([type=radio]):not([type=file])');
+  // clicking anywhere else leaves the field, even where a drag handler cancels the default focus change
+  document.addEventListener('pointerdown', e => {
+    const a = document.activeElement;
+    if (a && isField(a) && !a.isContentEditable && !e.target.closest('input, textarea, select, label, [contenteditable="true"]')) a.blur();
+  }, true);
   document.addEventListener('keydown', e => {
     const t = e.target;
-    const typing = t.closest && t.closest('input, textarea, select, [contenteditable="true"]');
+    const typing = isField(t);
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-    if (mod && e.key.toLowerCase() === 'y' && !typing) { e.preventDefault(); redo(); return; }
-    if (typing) return;
+    const isKey = (k, code) => e.key.toLowerCase() === k || e.code === code; // e.code also works with the Japanese IME on
+    if (mod && isKey('z', 'KeyZ') && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+    if (mod && isKey('y', 'KeyY') && !typing) { e.preventDefault(); redo(); return; }
+    if (typing) {
+      if (e.key === 'Escape' && !t.isContentEditable) t.blur();
+      return;
+    }
     if (!mod && !e.shiftKey && !e.altKey && ['1', '2', '3'].includes(e.key) && !(page === 'map' && sel.size)) {
       setPage(['map', 'schedule', 'day'][Number(e.key) - 1]);
       return;
     }
     if (page === 'map') mapKey(e);
     else if (page === 'day') dayKey(e);
-    else if (e.key === 'Escape') selectOnly(null);
+    else scheduleKey(e);
   });
   document.addEventListener('keyup', e => {
     if (e.key === ' ') { mm.space = false; mm.el.classList.remove('space'); }
