@@ -1582,7 +1582,7 @@ function ganttRow({ n, depth, hasKids }, W) {
   }
   return el('div', {
     class: `g-row${isRoot ? ' root' : ''}${n.done ? ' done' : ''}${sel.has(n.id) ? ' selected' : ''}`,
-    'data-row': n.id, 'data-id': n.id,
+    'data-row': n.id, 'data-id': n.id, style: { '--gc': colorOf(rootOf(n)) },
   }, label, track);
 }
 
