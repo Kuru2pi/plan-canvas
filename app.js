@@ -1913,7 +1913,8 @@ function dayAgenda(d, items) {
 /* =========================================================
    Day planner
    ========================================================= */
-const dayS = { date: todayISO(), hourH: 48, scrollEl: null, lane: null, ghost: null, scrolledFor: null, query: '' };
+const HOUR_H = 48;
+const dayS = { date: todayISO(), hourH: data.ui.hourH || HOUR_H, scrollEl: null, lane: null, ghost: null, scrolledFor: null, query: '' };
 const SNAP = 15;
 const blocksOn = date => Object.values(data.blocks).filter(b => b.date === date);
 const linkedNode = b => (b.nodeId && data.nodes[b.nodeId]) || null;
@@ -2011,16 +2012,20 @@ function renderDayMain() {
   const scroll = el('div', { class: 'day-scroll' });
   const grid = el('div', { class: 'day-grid', style: { height: 24 * H + 'px' } });
   for (let h = 0; h <= 24; h++) {
-    grid.append(el('div', { class: 'hour', style: { top: h * H + 'px' } }, el('span', null, `${pad(h)}:00`)));
-    if (h < 24) grid.append(el('div', { class: 'hour half', style: { top: h * H + H / 2 + 'px' } }));
+    grid.append(el('div', { class: 'hour', 'data-h': h, style: { top: h * H + 'px' } }, el('span', null, `${pad(h)}:00`)));
   }
   const lane = el('div', { class: 'day-lane' });
   grid.append(lane);
   if (d === today) grid.append(el('div', { class: 'now', style: { top: nowMin() / 60 * H + 'px' } }));
   scroll.append(grid);
-  box.append(scroll);
+  box.append(scroll, el('div', { class: 'day-zoom' },
+    el('button', { title: '縮小 (⌘-)', onclick: () => zoomDay(1 / 1.25) }, icon('minus')),
+    el('button', { class: 'zoom', id: 'dayZoomLbl', title: '100%に戻す', onclick: () => setHourH(HOUR_H) }, Math.round(dayS.hourH / HOUR_H * 100) + '%'),
+    el('button', { title: '拡大 (⌘+)', onclick: () => zoomDay(1.25) }, icon('plus'))));
   dayS.scrollEl = scroll;
+  dayS.grid = grid;
   dayS.lane = lane;
+  bindDayZoom(scroll);
   dayS.ghost = el('div', { class: 'ghost' });
 
   lane.addEventListener('pointerdown', onLaneDown);
@@ -2051,6 +2056,45 @@ function renderDayMain() {
     else scroll.scrollTop = d === today ? Math.max(0, nowMin() / 60 * H - 160) : 7 * H;
     dayS.scrolledFor = d;
   });
+}
+
+/* ---------- timeline zoom: only the height of an hour changes ---------- */
+function setHourH(h, anchorY) {
+  const sc = dayS.scrollEl, H = clamp(h, 24, 240);
+  const r = sc.getBoundingClientRect();
+  const y = anchorY ?? r.top + r.height / 2; // this time stays under the pointer
+  const m = minuteAt(y);
+  const laneTop = dayS.lane.getBoundingClientRect().top - r.top + sc.scrollTop;
+  dayS.hourH = H;
+  data.ui.hourH = H;
+  dayS.grid.style.height = 24 * H + 'px';
+  $$('.hour', dayS.grid).forEach(e => { e.style.top = e.dataset.h * H + 'px'; });
+  const now = $('.now', dayS.grid);
+  if (now) now.style.top = nowMin() / 60 * H + 'px';
+  renderBlocks();
+  sc.scrollTop = laneTop + m / 60 * H - (y - r.top);
+  $('#dayZoomLbl').textContent = Math.round(H / HOUR_H * 100) + '%';
+  save();
+}
+const zoomDay = (f, y) => setHourH(dayS.hourH * f, y);
+function bindDayZoom(sc) {
+  sc.addEventListener('wheel', e => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    zoomDay(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 16 : 1) * 0.01), e.clientY);
+  }, { passive: false });
+  let pinch = null;
+  const span = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  sc.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) { pinch = { d: span(e.touches), h: dayS.hourH }; dayS.pinched = true; }
+    else if (e.touches.length === 1) dayS.pinched = false;
+  }, { passive: true });
+  sc.addEventListener('touchmove', e => {
+    if (!pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    setHourH(pinch.h * span(e.touches) / pinch.d, (e.touches[0].clientY + e.touches[1].clientY) / 2);
+  }, { passive: false });
+  sc.addEventListener('touchend', e => { if (e.touches.length < 2) pinch = null; });
 }
 
 function minuteAt(clientY) {
@@ -2095,7 +2139,7 @@ function renderBlocks() {
   const lay = layoutBlocks(bl);
   for (const b of bl) {
     const { col, n: cnt } = lay.get(b.id);
-    const dur = b.end - b.start, small = dur < 45;
+    const dur = b.end - b.start, small = dur / 60 * H < 36;
     const node = linkedNode(b);
     const proj = node && parentOf(node) ? rootOf(node).title : null;
     lane.append(el('div', {
@@ -2130,7 +2174,7 @@ function onLaneDown(e) {
   }
   if (!be && e.pointerType === 'touch') {
     trackPointer(e, null, (ev, dx, dy) => {
-      if (ev.type === 'pointercancel' || Math.hypot(dx, dy) > 8) return;
+      if (ev.type === 'pointercancel' || dayS.pinched || Math.hypot(dx, dy) > 8) return;
       if (selBlock) { selBlock = null; renderBlocks(); renderInspector(); return; }
       const m = clamp(Math.floor(minuteAt(e.clientY) / 30) * 30, 0, 1380);
       openEventPopover(e.clientX, e.clientY, { date: dayS.date, start: m });
@@ -2221,6 +2265,8 @@ function clearDay() {
 function dayKey(e) {
   const b = selBlock && data.blocks[selBlock];
   const mod = e.metaKey || e.ctrlKey;
+  if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomDay(1.25); return; }
+  if (mod && e.key === '-') { e.preventDefault(); zoomDay(1 / 1.25); return; }
   if (!b) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); mutate(() => { delete data.blocks[b.id]; selBlock = null; }); }
   else if (e.key === 'Escape') { selBlock = null; renderBlocks(); renderInspector(); }
@@ -2692,7 +2738,8 @@ function daySummary() {
     '・左のタスクを時間割にドラッグ（クリックで空き時間に追加）', el('br'),
     '・空いている所をドラッグ／ダブルクリックで予定を作成', el('br'),
     '・予定の上下端をドラッグで時間を伸縮（15分単位）', el('br'),
-    '・選択して Delete で削除、↑↓ で15分移動、⌘D で複製')));
+    '・選択して Delete で削除、↑↓ で15分移動、⌘D で複製', el('br'),
+    '・⌘+スクロール／ピンチ／右下のボタンで時間割を拡大縮小')));
   return frag;
 }
 

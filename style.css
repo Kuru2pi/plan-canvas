@@ -835,3 +835,21 @@ body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-selec
   .pct-inp .inp { height: 34px; }
 }
 .pct-row { flex-wrap: wrap; }
+
+/* ---------- day timeline zoom ---------- */
+.daymain { position: relative; }
+.day-scroll { touch-action: pan-y; }
+.day-zoom {
+  position: absolute; right: 22px; bottom: 16px; z-index: 6; display: flex; align-items: center; gap: 2px; padding: 4px;
+  background: var(--ink); color: #fff; border-radius: 12px; box-shadow: var(--shadow-lg);
+}
+.day-zoom button {
+  height: 30px; min-width: 30px; padding: 0 6px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,.8); font-variant-numeric: tabular-nums;
+}
+.day-zoom button:hover { background: rgba(255,255,255,.12); color: #fff; }
+.day-zoom .zoom { min-width: 46px; }
+@media (max-width: 760px) {
+  .day-zoom { right: 12px; bottom: 10px; }
+  .day-zoom button { height: 34px; min-width: 34px; }
+}
