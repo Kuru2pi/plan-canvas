@@ -863,3 +863,11 @@ body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-selec
 .g-row.root:hover .g-label { background: color-mix(in srgb, var(--gc) 18%, #fff); }
 .g-row.selected, .g-row.root.selected { background: rgba(46,124,246,.08); }
 .g-row.selected .g-label, .g-row.root.selected .g-label { background: var(--sel-bg); }
+
+/* ---------- map performance ---------- */
+.canvas { background-image: none; }
+.grid {
+  position: absolute; inset: -64px; pointer-events: none; will-change: transform;
+  background-image: radial-gradient(circle, #dcd9d2 1px, transparent 1.2px);
+}
+.world.in-motion { will-change: transform; }

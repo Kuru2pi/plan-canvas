@@ -252,7 +252,20 @@ function mutate(fn, render = true) {
 /* ---------- tree helpers ---------- */
 const allNodes = () => Object.values(data.nodes);
 const parentOf = n => (n.parentId && data.nodes[n.parentId] ? n.parentId : null);
+let treeIndex = null;
+function withTree(fn) {
+  if (treeIndex) return fn();
+  treeIndex = new Map();
+  for (const n of allNodes()) {
+    const pid = parentOf(n);
+    if (!treeIndex.has(pid)) treeIndex.set(pid, []);
+    treeIndex.get(pid).push(n);
+  }
+  for (const kids of treeIndex.values()) kids.sort((a, b) => a.y - b.y || a.x - b.x);
+  try { return fn(); } finally { treeIndex = null; }
+}
 function childrenOf(id) {
+  if (treeIndex) return treeIndex.get(id) || [];
   return allNodes().filter(n => parentOf(n) === id).sort((a, b) => a.y - b.y || a.x - b.x);
 }
 const roots = () => childrenOf(null);
@@ -436,19 +449,27 @@ function initMap() {
   mm.svg = $('#mm .edges');
   mm.layer = $('#mm .nodes');
   mm.marquee = $('#mm .marquee');
+  mm.grid = el('div', { class: 'grid' });
+  mm.el.prepend(mm.grid);
 
   mm.el.addEventListener('pointerdown', onMapDown);
   mm.edgeAdd = el('button', { class: 'edge-add', title: 'ここにタスクを挿入', onpointerdown: e => e.stopPropagation(), onclick: () => { if (mm.edgeAddFor) insertBetween(mm.edgeAddFor); } }, icon('plus'));
   mm.el.append(mm.edgeAdd);
   mm.el.addEventListener('pointermove', e => {
     if (e.buttons || editingId || mm.space || mm.tool === 'hand') return;
-    if (e.target.closest('.edge-add')) return;
-    let ed = null;
-    if (!e.target.closest('.node, .memo, .dock')) {
-      const w = screenToWorld(e.clientX, e.clientY);
-      ed = edgeAt(w.x, w.y, 10 / data.view.z);
-    }
-    showEdgeAdd(ed);
+    mm.hoverEvent = e;
+    if (mm.hoverFrame) return;
+    mm.hoverFrame = requestAnimationFrame(() => {
+      mm.hoverFrame = 0;
+      const ev = mm.hoverEvent;
+      if (ev.target.closest('.edge-add')) return;
+      let ed = null;
+      if (!ev.target.closest('.node, .memo, .dock')) {
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        ed = edgeAt(w.x, w.y, 10 / data.view.z);
+      }
+      showEdgeAdd(ed);
+    });
   });
   mm.el.addEventListener('pointerleave', () => showEdgeAdd(null));
   mm.el.addEventListener('wheel', e => {
@@ -507,13 +528,21 @@ function screenToWorld(cx, cy) {
   const r = mm.el.getBoundingClientRect(), v = data.view;
   return { x: (cx - r.left - v.x) / v.z, y: (cy - r.top - v.y) / v.z };
 }
+const GRID_PAD = 64;
 function applyView() {
   const v = data.view;
   if (mm.edgeAdd) mm.edgeAdd.style.display = 'none';
   mm.world.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.z})`;
-  const g = 20 * v.z;
-  mm.el.style.backgroundSize = `${g}px ${g}px`;
-  mm.el.style.backgroundPosition = `${v.x}px ${v.y}px`;
+  // the dots live on their own layer, so panning only moves it; spacing doubles when zoomed out
+  let g = 20 * v.z;
+  while (g < 14) g *= 2;
+  if (g !== mm.gridSize) { mm.gridSize = g; mm.grid.style.backgroundSize = `${g}px ${g}px`; }
+  const wrap = n => ((n + GRID_PAD) % g + g) % g;
+  mm.grid.style.transform = `translate(${wrap(v.x)}px, ${wrap(v.y)}px)`;
+  // keep the map on its own layer while it moves, then let the text redraw sharply
+  mm.world.classList.add('in-motion');
+  clearTimeout(mm.motionTimer);
+  mm.motionTimer = setTimeout(() => mm.world.classList.remove('in-motion'), 160);
   const zl = $('#zoomLbl');
   if (zl) zl.textContent = Math.round(v.z * 100) + '%';
 }
@@ -528,10 +557,10 @@ function zoomAt(f, cx, cy) {
 }
 const zoomTo = z => zoomAt(z / data.view.z);
 function nodeBox(id) {
-  const n = data.nodes[id], e = mm.nodeEls[id];
-  if (e && e.isConnected && e.offsetWidth) return { x: n.x, y: n.y, w: e.offsetWidth, h: e.offsetHeight };
-  const c = mm.size[id];
-  return { x: n.x, y: n.y, w: c ? c.w : 160, h: c ? c.h : 44 };
+  const n = data.nodes[id], c = mm.size[id];
+  if (c) return { x: n.x, y: n.y, w: c.w, h: c.h };
+  const e = mm.nodeEls[id];
+  return { x: n.x, y: n.y, w: e && e.offsetWidth || 160, h: e && e.offsetHeight || 44 };
 }
 function fitView() {
   const boxes = Object.keys(mm.nodeEls).map(nodeBox).concat(Object.keys(mm.memoEls).map(memoBox));
@@ -612,18 +641,23 @@ function renderMap() {
   mm.layer.textContent = '';
   mm.nodeEls = {};
   mm.memoEls = {};
-  const vis = visibleNodes();
-  for (const n of vis) {
-    const e = nodeEl(n);
-    mm.layer.append(e);
-    mm.nodeEls[n.id] = e;
-  }
+  const vis = withTree(() => {
+    const list = visibleNodes();
+    for (const n of list) {
+      const e = nodeEl(n);
+      mm.layer.append(e);
+      mm.nodeEls[n.id] = e;
+    }
+    return list;
+  });
   // memos sit on top of the tree, like sticky notes
   for (const m of Object.values(data.notes)) {
     const e = memoEl(m);
     mm.layer.append(e);
     mm.memoEls[m.id] = e;
   }
+  // measure once per render; drags and edges reuse this instead of forcing layout
+  for (const [id, e] of Object.entries(mm.nodeEls)) if (e.offsetWidth) mm.size[id] = { w: e.offsetWidth, h: e.offsetHeight };
   if (data.ui.stack) {
     layoutAll(true);
     delete data.ui.stack;
@@ -634,21 +668,20 @@ function renderMap() {
       e.style.top = n.y + 'px';
     }
   }
-  for (const [id, e] of Object.entries(mm.nodeEls)) mm.size[id] = { w: e.offsetWidth, h: e.offsetHeight };
   drawEdges();
   applyView();
-  renderLayers();
+  withTree(renderLayers);
 }
 
 function drawEdges() {
   let out = '';
   mm.edges = [];
-  for (const [id, e] of Object.entries(mm.nodeEls)) {
+  for (const id of Object.keys(mm.nodeEls)) {
     const n = data.nodes[id];
     const pid = parentOf(n);
     if (!pid || !mm.nodeEls[pid]) continue;
-    const p = data.nodes[pid], pe = mm.nodeEls[pid];
-    const pw = pe.offsetWidth, ph = pe.offsetHeight, cw = e.offsetWidth, ch = e.offsetHeight;
+    const p = data.nodes[pid];
+    const { w: pw, h: ph } = nodeBox(pid), { w: cw, h: ch } = nodeBox(id);
     const y1 = p.y + ph / 2, y2 = n.y + ch / 2;
     let x1, x2;
     if (n.x + cw / 2 >= p.x + pw / 2) { x1 = p.x + pw; x2 = n.x; } else { x1 = p.x; x2 = n.x + cw; }
@@ -682,10 +715,14 @@ function edgeAt(wx, wy, tol, skip) {
   }
   return best;
 }
+function drawEdgesSoon() {
+  if (mm.edgeFrame) return;
+  mm.edgeFrame = requestAnimationFrame(() => { mm.edgeFrame = 0; drawEdges(); });
+}
 function setHotEdge(id) {
   if (mm.hotEdge === id) return;
   mm.hotEdge = id;
-  drawEdges();
+  drawEdgesSoon();
 }
 
 /* ---------- insert between / pull out ---------- */
@@ -942,7 +979,7 @@ function startNodeDrag(e, id) {
       target = t;
       if (target) mm.nodeEls[target].classList.add('drop');
     }
-    drawEdges();
+    drawEdgesSoon();
     // over a connection line? → insert between
     edge = null;
     if (!target && single) {
@@ -1436,7 +1473,7 @@ function renderSchedule() {
       el('div', { class: 'spacer' }),
       el('label', { class: 'toggle' }, el('input', { type: 'checkbox', checked: sch.showAll, onchange: e => { sch.showAll = e.target.checked; renderSchedule(); } }), '日付のないタスクも表示'),
     );
-    box.append(tb, buildGantt());
+    box.append(tb, withTree(buildGantt));
   } else {
     const d = parseISO(sch.month);
     tb.append(
@@ -1448,7 +1485,7 @@ function renderSchedule() {
       el('span', { class: 'muted small' }, '空いている所をクリックで予定を追加・日付の数字で「1日の計画」へ'),
       el('button', { class: 'btn primary', onclick: e => openEventPopover(e.clientX, e.clientY + 20, { date: todayISO(), start: 600 }) }, icon('plus'), '予定'),
     );
-    box.append(tb, buildCalendar());
+    box.append(tb, withTree(buildCalendar));
   }
 }
 const days7 = ws => [...Array(7)].map((_, i) => addDays(ws, i));
@@ -1969,7 +2006,7 @@ function openPctPopover(x, y, n) {
   placePopover(x, y);
 }
 
-function renderDay() { renderPalette(); renderDayMain(); }
+function renderDay() { withTree(renderPalette); renderDayMain(); }
 
 function setDayDate(d) { dayS.date = d; selBlock = null; renderAll(); }
 
@@ -2411,7 +2448,7 @@ function renderInspector() {
   const focused = document.activeElement && box.contains(document.activeElement);
   if (focused && document.activeElement.matches('input[type=text], textarea')) return;
   box.textContent = '';
-  renderInspectorBody(box);
+  withTree(() => renderInspectorBody(box));
   renderInspectorShell();
 }
 function renderInspectorBody(box) {
@@ -2843,5 +2880,7 @@ function initTop() {
 
 initTop();
 initMap();
+// web fonts change card widths once they arrive
+if (document.fonts) document.fonts.ready.then(() => { if (page === 'map' && !editingId) renderMap(); });
 updateUndoButtons();
 setPage(page);
