@@ -854,13 +854,10 @@ body.row-dragging, body.row-dragging * { cursor: grabbing !important; user-selec
   .day-zoom button { height: 34px; min-width: 34px; }
 }
 
-/* ---------- timeline: a soft tint per project; rows stay see-through so the day grid and today line show ---------- */
-.g-row { background: color-mix(in srgb, var(--gc) 6%, transparent); }
-.g-row.root { background: color-mix(in srgb, var(--gc) 13%, transparent); }
-.g-row .g-label { background: color-mix(in srgb, var(--gc) 6%, #fff); }
-.g-row.root .g-label { background: color-mix(in srgb, var(--gc) 13%, #fff); }
-.g-row:hover .g-label { background: color-mix(in srgb, var(--gc) 11%, #fff); }
-.g-row.root:hover .g-label { background: color-mix(in srgb, var(--gc) 18%, #fff); }
+/* ---------- timeline: one faint tint per top-level parent, the same on every row of the group; rows stay see-through so the day grid and today line show ---------- */
+.g-row, .g-row.root { background: color-mix(in srgb, var(--gc) 4%, transparent); }
+.g-row .g-label, .g-row.root .g-label { background: color-mix(in srgb, var(--gc) 4%, #fff); }
+.g-row:hover .g-label, .g-row.root:hover .g-label { background: color-mix(in srgb, var(--gc) 8%, #fff); }
 .g-row.selected, .g-row.root.selected { background: rgba(46,124,246,.08); }
 .g-row.selected .g-label, .g-row.root.selected .g-label { background: var(--sel-bg); }
 
